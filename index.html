@@ -171,13 +171,19 @@ async function iniciar() {
     med["Pyodide"] = version;
     med["Carga de Python"] = seg(t1 - t0);
     estado("Cargando el núcleo contable…", 75);
-    const lista = (await (await fetch("archivos.txt")).text()).trim().split("\n");
+    const rl = await fetch("archivos.txt");
+    if (!rl.ok) throw new Error("falta el archivo archivos.txt en el sitio");
+    const lista = (await rl.text()).trim().split(/\r?\n/);
+    const faltan = [];
     await Promise.all(lista.map(async (f) => {
-      const texto = await (await fetch(`nucleo/${f.replace("__init__.py", "init__.py")}.txt`)).text();
+      const resp = await fetch(`nucleo/${f.replace("__init__.py", "init__.py")}.txt`);
+      if (!resp.ok) { faltan.push(`nucleo/${f.replace("__init__.py", "init__.py")}.txt`); return; }
+      const texto = await resp.text();
       const ruta = `/home/pyodide/pd/${f}`;
       py.FS.mkdirTree(ruta.slice(0, ruta.lastIndexOf("/")));
       py.FS.writeFile(ruta, texto);
     }));
+    if (faltan.length) throw new Error(`faltan ${faltan.length} archivo(s) del núcleo en el sitio: ${faltan.sort().join(", ")}`);
     py.runPython(`import sys; sys.path.insert(0, "/home/pyodide/pd")\nimport web_pd`);
     med["Carga del núcleo contable"] = seg(performance.now() - t1);
     med["Total hasta estar listo"] = seg(performance.now() - t0);
@@ -185,7 +191,7 @@ async function iniciar() {
     $("b-ejemplo").disabled = false; $("b-abrir").removeAttribute("aria-disabled");
     estado("Listo. Abra un archivo .db o use la empresa de ejemplo.", 100);
   } catch (e) {
-    estado("No se pudo cargar Python en este navegador: " + (e.message || e) + ". Toque «Copiar la medición» y péguela en la conversación.", 100, true);
+    estado("No se pudo preparar la aplicación: " + (e.message || e) + ". Toque «Copiar la medición» y péguela en la conversación.", 100, true);
     med["Error"] = String(e.message || e);
   }
   mostrarMedicion();
