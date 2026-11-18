@@ -46,7 +46,7 @@
   tr.alerta td { background: var(--alerta); color: var(--mal); }
   .notas { font-size: 12.5px; color: var(--suave); font-style: italic; margin: 8px 2px 0; }
   dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
-  dt { color: var(--suave); } dd { margin: 0; font-variant-numeric: tabular-nums; }
+  dt { color: var(--suave); } dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .pista { font-size: 13px; color: var(--suave); margin: 8px 0 0; }
   footer { max-width: 980px; margin: 0 auto; padding: 4px 16px 24px; font-size: 12px; color: var(--suave); }
   @media (min-width: 720px) { main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } #t-informe-res { grid-column: 1 / -1; } }
@@ -68,6 +68,7 @@
     <p class="pista">En un celular Android, «Abrir archivo» permite elegir el archivo desde Google Drive.</p>
     <div class="barra"><i id="progreso"></i></div>
     <div id="estado">Preparando Python en el navegador…</div>
+    <p class="pista" id="idea"></p>
   </section>
 
   <section class="tarjeta" id="t-informe">
@@ -137,7 +138,7 @@ async function cargarPyodide() {
   if (window.PD_PYODIDE) return [await import(window.PD_PYODIDE + "pyodide.mjs"), window.PD_PYODIDE, "local"];
   let ultimo;
   // primero, los archivos de Python que viajan con esta misma página: en la carpeta py/ o sueltos junto a index.html
-  for (const carpeta of ["py/", "./"]) {
+  for (const carpeta of ["./", "py/"]) {
     const propio = new URL(carpeta, location.href).href;
     try {
       return [await conLimite(import(propio + "pyodide.mjs"), 30, carpeta + "pyodide.mjs"), propio, "propio"];
@@ -149,6 +150,19 @@ async function cargarPyodide() {
   }
   throw ultimo;
 }
+
+const IDEAS = [
+  "Todo asiento tiene al menos una cuenta en el Debe y otra en el Haber, y las dos sumas son iguales.",
+  "El activo aumenta por el Debe; el pasivo y el patrimonio aumentan por el Haber.",
+  "Los gastos se registran en el Debe y los ingresos en el Haber, porque disminuyen o aumentan el patrimonio.",
+  "Un saldo contrario a la naturaleza de la cuenta suele avisar de un error de registración.",
+  "Luca Pacioli explicó el método de la partida doble en su Summa, publicada en Venecia en 1494.",
+  "El balance de comprobación cuadra aunque haya errores: si se usó la cuenta equivocada, Debe y Haber igual coinciden.",
+  "Al cierre del ejercicio, las cuentas de resultado se cancelan contra el resultado del ejercicio.",
+];
+let idea = 0;
+const relojIdeas = setInterval(() => { $("idea").textContent = "Mientras tanto: " + IDEAS[idea++ % IDEAS.length]; }, 4000);
+$("idea").textContent = "Mientras tanto: " + IDEAS[idea++];
 
 async function iniciar() {
   try {
@@ -174,6 +188,15 @@ async function iniciar() {
     med["Pyodide"] = version;
     med["Carga de Python"] = seg(t1 - t0);
     estado("Cargando el núcleo contable…", 75);
+    const empaquetado = await fetch("nucleo.json").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (empaquetado) {
+      for (const [f, texto] of Object.entries(empaquetado)) {
+        const ruta = `/home/pyodide/pd/${f}`;
+        py.FS.mkdirTree(ruta.slice(0, ruta.lastIndexOf("/")));
+        py.FS.writeFile(ruta, texto);
+      }
+      med["Núcleo"] = "un solo archivo (nucleo.json)";
+    } else {
     const rl = await fetch("archivos.txt");
     if (!rl.ok) throw new Error("falta el archivo archivos.txt en el sitio");
     const lista = (await rl.text()).trim().split(/\r?\n/);
@@ -189,13 +212,17 @@ async function iniciar() {
       py.FS.writeFile(ruta, texto);
     }));
     if (faltan.length) throw new Error(`faltan ${faltan.length} archivo(s) del núcleo en el sitio: ${faltan.sort().join(", ")}`);
+    med["Núcleo"] = "archivo por archivo";
+    }
     py.runPython(`import sys; sys.path.insert(0, "/home/pyodide/pd")\nimport web_pd`);
     med["Carga del núcleo contable"] = seg(performance.now() - t1);
     med["Total hasta estar listo"] = seg(performance.now() - t0);
     med["Etapa"] = "lista";
+    clearInterval(relojIdeas); $("idea").textContent = "";
     $("b-ejemplo").disabled = false; $("b-abrir").removeAttribute("aria-disabled");
     estado("Listo. Abra un archivo .db o use la empresa de ejemplo.", 100);
   } catch (e) {
+    clearInterval(relojIdeas); $("idea").textContent = "";
     estado("No se pudo preparar la aplicación: " + (e.message || e) + ". Toque «Copiar la medición» y péguela en la conversación.", 100, true);
     med["Error"] = String(e.message || e);
   }
@@ -285,6 +312,10 @@ $("b-copiar").addEventListener("click", async () => {
 });
 addEventListener("error", (e) => { med["Error de la página"] = String(e.message || e); mostrarMedicion(); });
 addEventListener("unhandledrejection", (e) => { med["Error de la página"] = String(e.reason && e.reason.message || e.reason); mostrarMedicion(); });
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("sw.js").then(() => { med["Sin conexión"] = "preparado"; })
+    .catch(() => { med["Sin conexión"] = "no disponible en este sitio"; });
+}
 mostrarMedicion();
 iniciar();
 </script>
