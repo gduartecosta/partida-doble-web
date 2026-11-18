@@ -3,154 +3,260 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Partida Doble web · prueba de concepto</title>
+<title>Partida Doble · versión web</title>
 <style>
   :root {
-    --tinta: #1f2a37; --suave: #5b6675; --linea: #d9dee5; --fondo: #f4f6f8; --papel: #ffffff;
-    --acento: #1d4e89; --acento-claro: #e7eef7; --ok: #2f855a; --mal: #b42318; --alerta: #fdecea;
+    --tinta: #1f2a37; --suave: #5b6675; --linea: #d5dbe3; --fondo: #eef1f5; --papel: #ffffff;
+    --acento: #1d4e89; --acento-claro: #e6edf6; --mal: #b42318; --alerta: #fdecea; --ok: #2f6f4f;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--tinta);
-         background: var(--fondo); }
-  header { background: var(--acento); color: #fff; padding: 14px 16px 12px; }
-  header h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: .2px; }
-  header p { margin: 2px 0 0; font-size: 13px; opacity: .85; }
-  main { max-width: 980px; margin: 0 auto; padding: 12px; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
-    .tarjeta { min-width: 0; background: var(--papel); border: 1px solid var(--linea); border-radius: 10px; padding: 14px; }
-  .tarjeta h2 { margin: 0 0 10px; font-size: 15px; color: var(--acento); text-transform: uppercase; letter-spacing: .6px; }
-  .fila { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  button, .boton { appearance: none; border: 1px solid var(--acento); background: var(--acento); color: #fff;
-         font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px; cursor: pointer; min-height: 44px; }
-  button.sec, .boton.sec { background: #fff; color: var(--acento); }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 13.5px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--tinta);
+         background: var(--fondo); display: flex; flex-direction: column; min-width: 1000px; }
+  button { font: inherit; border: 1px solid var(--acento); background: var(--acento); color: #fff; border-radius: 6px;
+           padding: 4px 10px; cursor: pointer; font-weight: 600; }
+  button.sec { background: #fff; color: var(--acento); }
+  button.peligro { background: #fff; color: var(--mal); border-color: var(--mal); }
   button:disabled { opacity: .45; cursor: default; }
-  input[type=file] { position: absolute; left: -9999px; }
-  label.campo { display: grid; gap: 4px; font-size: 13px; color: var(--suave); flex: 1 1 140px; }
-  select, input[type=date] { font: inherit; color: var(--tinta); padding: 9px 10px; border: 1px solid var(--linea);
-         border-radius: 8px; background: #fff; min-height: 44px; width: 100%; }
-  #estado { font-size: 14px; color: var(--suave); margin-top: 10px; min-height: 1.4em; }
-  #estado.error { color: var(--mal); }
-  .barra { height: 4px; background: var(--acento-claro); border-radius: 2px; overflow: hidden; margin-top: 8px; }
-  .barra > i { display: block; height: 100%; width: 0; background: var(--acento); transition: width .3s; }
-  #cabecera h3 { margin: 0; font-size: 17px; }
-  #cabecera p { margin: 2px 0 10px; color: var(--suave); font-size: 13px; }
-  .tabla { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--linea); border-radius: 8px; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
-  th, td { padding: 6px 8px; border-bottom: 1px solid #eef1f4; white-space: nowrap; }
-  th { position: sticky; top: 0; background: var(--acento-claro); text-align: left; font-weight: 650; z-index: 1; }
-  th.num, td.num { text-align: right; }
-  td.texto { white-space: normal; min-width: 150px; }
-  tr.titulo td { font-weight: 700; font-size: 14px; padding-top: 10px; }
+  input, select { font: inherit; color: var(--tinta); border: 1px solid var(--linea); border-radius: 5px; padding: 3px 6px;
+                  background: #fff; min-width: 0; }
+  input:focus, select:focus { outline: 2px solid #9db8dc; outline-offset: -1px; }
+  label.c { display: inline-flex; align-items: center; gap: 5px; color: var(--suave); }
+
+  /* franja superior */
+  #arriba { display: flex; align-items: center; gap: 8px; background: var(--acento); color: #fff; padding: 5px 10px; }
+  #arriba h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 700; white-space: nowrap; }
+  #arriba select { max-width: 260px; }
+  #arriba .esp { flex: 1; }
+  #arriba button { background: #fff; color: var(--acento); border-color: #fff; }
+  #arriba button.clara { background: transparent; color: #fff; border-color: #ffffff88; }
+  #cambios { font-size: 12px; background: #fde68a; color: #5c4400; border-radius: 4px; padding: 2px 6px; }
+  input[type=file] { display: none; }
+
+  /* pestañas */
+  #pestanas { display: flex; gap: 2px; background: var(--papel); border-bottom: 1px solid var(--linea); padding: 0 8px; }
+  #pestanas .grupo { color: var(--suave); font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+                     align-self: center; margin: 0 4px 0 10px; }
+  #pestanas button { white-space: nowrap; background: none; border: none; border-bottom: 3px solid transparent; color: var(--tinta);
+                     border-radius: 0; padding: 7px 10px 5px; font-weight: 500; }
+  #pestanas button.activa { border-bottom-color: var(--acento); color: var(--acento); font-weight: 700; }
+  #pestanas button:disabled { color: #9aa3ae; }
+
+  main { flex: 1; min-height: 0; padding: 8px 10px; }
+  .vista { height: 100%; display: none; }
+  .vista.activa { display: flex; flex-direction: column; gap: 6px; }
+  .barra { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .panel { background: var(--papel); border: 1px solid var(--linea); border-radius: 8px; }
+  .desliza { overflow: auto; flex: 1; min-height: 0; }
+
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 3px 7px; border-bottom: 1px solid #edf0f3; white-space: nowrap; text-align: left; }
+  th { position: sticky; top: 0; background: var(--acento-claro); font-weight: 650; z-index: 1; }
+  .num { text-align: right; }
+  td.texto { white-space: normal; }
+  tr.titulo td { font-weight: 700; }
   tr.subtitulo td { font-weight: 650; background: #f7f9fb; }
   tr.subtotal td { font-weight: 650; border-top: 1px solid #b8c1cc; }
   tr.total td { font-weight: 750; border-top: 1px solid #444; border-bottom: 3px double #444; }
   tr.alerta td { background: var(--alerta); color: var(--mal); }
-  .notas { font-size: 12.5px; color: var(--suave); font-style: italic; margin: 8px 2px 0; }
-  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
-  dt { color: var(--suave); } dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  .pista { font-size: 13px; color: var(--suave); margin: 8px 0 0; }
-  footer { max-width: 980px; margin: 0 auto; padding: 4px 16px 24px; font-size: 12px; color: var(--suave); }
-  @media (min-width: 720px) { main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } #t-informe-res { grid-column: 1 / -1; } }
+  tr.rubro td { font-weight: 650; }
+  tbody tr.elegible { cursor: pointer; }
+  tbody tr.elegible:hover td { background: #f3f6fa; }
+  tbody tr.elegida td { background: var(--acento-claro); }
+
+  /* asientos */
+  #v-asientos { flex-direction: row !important; }
+  #lista-asientos { width: 400px; flex: none; display: flex; flex-direction: column; }
+  #editor { flex: 1; display: flex; flex-direction: column; padding: 8px; gap: 6px; min-width: 0; }
+  #editor h2 { font-size: 14px; margin: 0; }
+  #lineas td { padding: 2px 3px; }
+  #lineas input, #lineas select { width: 100%; }
+  #lineas input.imp { text-align: right; }
+  select:disabled { background: #f2f4f7; color: #9aa3ae; }
+  #e-libro, #e-local { max-width: 190px; }
+  #lineas td.borrar button { padding: 1px 7px; }
+  #totales td { font-weight: 700; border: none; }
+  .mensaje { border-radius: 6px; padding: 6px 9px; }
+  .mensaje.error { background: var(--alerta); color: var(--mal); border: 1px solid #f3b8b0; }
+  .mensaje.ok { background: #e6f4ec; color: var(--ok); border: 1px solid #b6dcc6; }
+  .nota { color: var(--suave); font-size: 12.5px; }
+
+  #pie { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--suave);
+         background: var(--papel); border-top: 1px solid var(--linea); padding: 3px 10px; }
+
+  /* pantalla de carga */
+  #carga { position: fixed; inset: 0; background: var(--fondo); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  #carga .caja { width: 520px; background: var(--papel); border: 1px solid var(--linea); border-radius: 10px; padding: 20px 24px; }
+  #carga h2 { margin: 0 0 4px; color: var(--acento); font-size: 18px; }
+  .barra-avance { height: 5px; background: var(--acento-claro); border-radius: 3px; overflow: hidden; margin: 12px 0 8px; }
+  .barra-avance i { display: block; height: 100%; width: 0; background: var(--acento); transition: width .3s; }
+  #idea { color: var(--suave); min-height: 3.2em; margin: 10px 0 0; }
+  #inicio { text-align: center; margin: auto; max-width: 560px; }
+  #inicio p { color: var(--suave); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
+  dt { color: var(--suave); } dd { margin: 0; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
-<header>
-  <h1>Partida Doble · versión web</h1>
-  <p>Prueba de concepto: el mismo núcleo contable del programa de escritorio, funcionando en el navegador</p>
+<div id="carga">
+  <div class="caja">
+    <h2>Partida Doble</h2>
+    <div id="carga-estado">Preparando Python en el navegador…</div>
+    <div class="barra-avance"><i id="avance"></i></div>
+    <p id="idea"></p>
+  </div>
+</div>
+
+<header id="arriba">
+  <h1>Partida Doble</h1>
+  <select id="s-empresa" title="Empresa" disabled><option>— sin base abierta —</option></select>
+  <span class="esp"></span>
+  <span id="cambios" hidden>Cambios sin guardar</span>
+  <label class="c"><button id="b-abrir" type="button">Abrir base…</button></label>
+  <input type="file" id="archivo" accept=".db,.sqlite,application/octet-stream,application/x-sqlite3">
+  <button id="b-ejemplo" class="clara" type="button">Empresa de ejemplo</button>
+  <button id="b-guardar" type="button" disabled>Guardar copia</button>
 </header>
+
+<nav id="pestanas">
+  <span class="grupo">Configuración</span>
+  <button data-v="empresa">Empresa</button>
+  <button data-v="plan">Plan de cuentas</button>
+  <span class="grupo">Ingreso</span>
+  <button data-v="asientos">Asientos</button>
+  <span class="grupo">Consultas</span>
+  <button data-v="consultas">Informes</button>
+  <button disabled title="Próxima etapa: nivel de análisis">Presupuestos</button>
+  <button disabled title="Próxima etapa: nivel de análisis">Tablero</button>
+  <span class="esp" style="flex:1"></span>
+  <button data-v="acerca">Acerca de</button>
+</nav>
+
 <main>
-  <section class="tarjeta">
-    <h2>1 · Empresa</h2>
-    <div class="fila">
-      <label class="boton" for="archivo" id="b-abrir" aria-disabled="true">Abrir archivo .db…</label>
-      <input type="file" id="archivo">
-      <button class="sec" id="b-ejemplo" disabled>Usar la empresa de ejemplo</button>
+  <section class="vista activa" id="v-inicio">
+    <div id="inicio">
+      <h2>Abra una base de datos para empezar</h2>
+      <p>Use <b>Abrir base…</b> para trabajar con un archivo <code>.db</code> del programa Partida Doble (por ejemplo, el
+        que entregó un alumno), o <b>Empresa de ejemplo</b> para practicar con La Comercial SAS.</p>
+      <p>La base se abre en la memoria de este navegador: no se sube a ningún lado. Los cambios quedan guardados
+        cuando usa <b>Guardar copia</b>, que descarga el archivo actualizado.</p>
     </div>
-    <p class="pista">En un celular Android, «Abrir archivo» permite elegir el archivo desde Google Drive.</p>
-    <div class="barra"><i id="progreso"></i></div>
-    <div id="estado">Preparando Python en el navegador…</div>
-    <p class="pista" id="idea"></p>
   </section>
 
-  <section class="tarjeta" id="t-informe">
-    <h2>2 · Informe</h2>
-    <div class="fila">
-      <label class="campo">Empresa<select id="s-empresa" disabled></select></label>
-      <label class="campo">Informe<select id="s-informe" disabled>
+  <section class="vista" id="v-empresa">
+    <div class="panel" style="padding:12px; max-width:640px">
+      <dl id="ficha"></dl>
+      <p class="nota">La ficha completa (datos de la AIN, CIIU, monedas) se edita, por ahora, en el programa de escritorio.</p>
+    </div>
+  </section>
+
+  <section class="vista" id="v-plan">
+    <div class="barra"><input id="plan-buscar" placeholder="Buscar por código o nombre" style="width:280px">
+      <span class="nota" id="plan-cuenta"></span></div>
+    <div class="panel desliza"><table id="t-plan"></table></div>
+  </section>
+
+  <section class="vista" id="v-asientos">
+    <div class="panel" id="lista-asientos">
+      <div class="barra" style="padding:6px">
+        <input type="date" id="a-desde" title="Desde"><input type="date" id="a-hasta" title="Hasta">
+        <input id="a-buscar" placeholder="Nº o concepto" style="width:110px">
+      </div>
+      <div class="desliza"><table id="t-asientos"></table></div>
+      <div class="nota" style="padding:4px 8px" id="a-cuantos"></div>
+    </div>
+    <div class="panel" id="editor">
+      <div class="barra">
+        <h2 id="e-titulo">Asiento nuevo</h2><span style="flex:1"></span>
+        <button class="sec" id="e-nuevo" type="button">Nuevo</button>
+        <button class="peligro" id="e-eliminar" type="button" disabled>Eliminar</button>
+        <button id="e-registrar" type="button">Registrar</button>
+      </div>
+      <div class="barra">
+        <label class="c">Fecha <input type="date" id="e-fecha"></label>
+        <label class="c">Libro <select id="e-libro"></select></label>
+        <label class="c">Local <select id="e-local"></select></label>
+      </div>
+      <input id="e-concepto" placeholder="Concepto del asiento">
+      <div class="desliza">
+        <table id="lineas">
+          <thead><tr><th style="width:34%">Cuenta</th><th style="width:20%">Cliente / proveedor</th><th>Concepto</th>
+            <th class="num" style="width:12%">Debe</th><th class="num" style="width:12%">Haber</th><th></th></tr></thead>
+          <tbody></tbody>
+          <tfoot id="totales"><tr><td><button class="sec" id="e-renglon" type="button">+ Renglón</button></td><td></td>
+            <td class="num">Totales</td><td class="num" id="tot-debe">0,00</td><td class="num" id="tot-haber">0,00</td><td></td></tr>
+            <tr><td colspan="3" class="num">Diferencia</td><td colspan="2" class="num" id="tot-dif">0,00</td><td></td></tr></tfoot>
+        </table>
+      </div>
+      <div id="e-mensaje"></div>
+    </div>
+    <datalist id="dl-cuentas"></datalist>
+  </section>
+
+  <section class="vista" id="v-consultas">
+    <div class="barra">
+      <select id="c-informe">
         <option value="balance">Balance de comprobación</option>
+        <option value="diario">Libro diario</option>
+        <option value="mayor">Mayor de una cuenta o rubro</option>
         <option value="situacion">Estado de situación financiera</option>
         <option value="resultados">Estado de resultados</option>
-        <option value="diario">Libro diario</option>
-      </select></label>
+      </select>
+      <label class="c">Desde <input type="date" id="c-desde"></label>
+      <label class="c">Hasta <input type="date" id="c-hasta"></label>
+      <label class="c" id="c-nivel-l">Nivel <select id="c-nivel"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
+      <label class="c" id="c-cuenta-l" hidden>Cuenta <input id="c-cuenta" list="dl-todas" style="width:260px"></label>
+      <button id="c-ver" type="button">Ver</button>
     </div>
-    <div class="fila" style="margin-top:8px">
-      <label class="campo">Desde<input type="date" id="f-desde" disabled></label>
-      <label class="campo">Hasta<input type="date" id="f-hasta" disabled></label>
-      <label class="campo">Nivel<select id="s-nivel" disabled>
-        <option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option>
-      </select></label>
-    </div>
-    <div class="fila" style="margin-top:10px"><button id="b-ver" disabled>Ver informe</button></div>
+    <div id="c-cabecera"></div>
+    <div class="panel desliza"><table id="t-informe"></table></div>
+    <div class="nota" id="c-notas"></div>
+    <datalist id="dl-todas"></datalist>
   </section>
 
-  <section class="tarjeta" id="t-informe-res" hidden>
-    <div id="cabecera"></div>
-    <div class="tabla"><table id="tabla"></table></div>
-    <div class="notas" id="notas"></div>
-  </section>
-
-  <section class="tarjeta" id="t-medicion">
-    <h2>3 · Medición en este equipo</h2>
-    <dl id="medicion"></dl>
-    <div class="fila" style="margin-top:10px"><button class="sec" id="b-copiar">Copiar la medición</button></div>
-    <p class="pista" id="copiado"></p>
+  <section class="vista" id="v-acerca">
+    <div class="panel desliza" style="padding:12px 16px">
+      <h2 style="margin-top:0">Partida Doble · versión web</h2>
+      <p>Sistema contable didáctico. Dirección pedagógica: Gustavo Duarte. Redacción y programación asistidas por
+        inteligencia artificial (Claude, Anthropic). Software libre bajo licencia GNU GPL versión 3 o posterior.</p>
+      <p>El cálculo contable lo hace el mismo núcleo de Partida Doble 7.6 de escritorio, sin cambios, ejecutado en el
+        navegador con Pyodide (Mozilla Public License 2.0). Esta etapa cubre el nivel básico: empresa, plan de cuentas,
+        registración de asientos en moneda nacional e informes.</p>
+      <h3>Medición en este equipo</h3>
+      <dl id="medicion"></dl>
+      <p><button class="sec" id="b-copiar" type="button">Copiar la medición</button> <span class="nota" id="copiado"></span></p>
+    </div>
   </section>
 </main>
-<footer>
-  Dirección pedagógica: Gustavo Duarte. Programación asistida por inteligencia artificial (Claude, Anthropic).
-  Software libre bajo licencia GNU GPL versión 3 o posterior. Usa Pyodide (Mozilla Public License 2.0) para ejecutar Python en el navegador.
-  Esta prueba no guarda nada: la base se abre en la memoria del navegador.
-</footer>
+
+<footer id="pie"><span id="mensaje">Preparando…</span><span id="archivo-nombre"></span></footer>
 
 <script type="module">
-const VERSIONES = ["0.27.8", "0.27.7", "0.27.5", "0.27.0"];
 const $ = (id) => document.getElementById(id);
-const med = { "Navegador": navigator.userAgent.replace(/^Mozilla\/5\.0 /, "").slice(0, 120),
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const seg = (ms) => `${(ms / 1000).toFixed(1).replace(".", ",")} s`;
+const espera = () => new Promise((r) => setTimeout(r, 20));
+const med = {
+  "Navegador": navigator.userAgent.replace(/^Mozilla\/5\.0 /, "").slice(0, 140),
   "Pantalla": `${screen.width} × ${screen.height} (ventana ${innerWidth} × ${innerHeight})`,
   "Núcleos del procesador": navigator.hardwareConcurrency || "sin dato",
-  "Memoria del equipo": navigator.deviceMemory ? `${navigator.deviceMemory} GB (aprox.)` : "el navegador no la informa" };
-let py = null, t0 = performance.now();
+  "Memoria del equipo": navigator.deviceMemory ? `${navigator.deviceMemory} GB (aprox.)` : "el navegador no la informa",
+};
+let py = null, wp = null, emp = null, nombreArchivo = "", sucio = false, datos = null, asientoActual = null;
+const t0 = performance.now();
 
+function mensaje(t) { $("mensaje").textContent = t; }
+function marcarSucio(v) { sucio = v; $("cambios").hidden = !v; }
 function mostrarMedicion() {
   if (performance.memory) med["Memoria usada por la página"] = `${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB`;
-  $("medicion").innerHTML = Object.entries(med).map(([k, v]) => `<dt>${k}</dt><dd>${esc(String(v))}</dd>`).join("");
+  $("medicion").innerHTML = Object.entries(med).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
 }
-function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
-function estado(texto, avance, error) {
-  $("estado").textContent = texto; $("estado").className = error ? "error" : "";
-  if (avance != null) $("progreso").style.width = `${avance}%`;
-}
-const seg = (ms) => `${(ms / 1000).toFixed(1).replace(".", ",")} s`;
-
-function conLimite(promesa, segundos, que) {
-  return Promise.race([promesa, new Promise((_, no) => setTimeout(() => no(new Error(`${que}: sin respuesta en ${segundos} s`)), segundos * 1000))]);
-}
-async function cargarPyodide() {
-  if (window.PD_PYODIDE) return [await import(window.PD_PYODIDE + "pyodide.mjs"), window.PD_PYODIDE, "local"];
-  let ultimo;
-  // primero, los archivos de Python que viajan con esta misma página: en la carpeta py/ o sueltos junto a index.html
-  for (const carpeta of ["./", "py/"]) {
-    const propio = new URL(carpeta, location.href).href;
-    try {
-      return [await conLimite(import(propio + "pyodide.mjs"), 30, carpeta + "pyodide.mjs"), propio, "propio"];
-    } catch (e) { ultimo = e; med["Intento con archivos propios (" + (carpeta === "./" ? "raíz" : carpeta) + ")"] = String(e.message || e); }
-  }
-  for (const v of VERSIONES) {
-    const url = `https://cdn.jsdelivr.net/pyodide/v${v}/full/`;
-    try { return [await conLimite(import(url + "pyodide.mjs"), 30, "pyodide " + v), url, v]; } catch (e) { ultimo = e; }
-  }
-  throw ultimo;
+function llamar(fn, ...args) {          // llama una función del puente y devuelve el objeto JSON
+  return JSON.parse(wp[fn](...args));
 }
 
+// ------------------------------------------------------------------ carga de Python
 const IDEAS = [
   "Todo asiento tiene al menos una cuenta en el Debe y otra en el Haber, y las dos sumas son iguales.",
   "El activo aumenta por el Debe; el pasivo y el patrimonio aumentan por el Haber.",
@@ -160,163 +266,301 @@ const IDEAS = [
   "El balance de comprobación cuadra aunque haya errores: si se usó la cuenta equivocada, Debe y Haber igual coinciden.",
   "Al cierre del ejercicio, las cuentas de resultado se cancelan contra el resultado del ejercicio.",
 ];
-let idea = 0;
-const relojIdeas = setInterval(() => { $("idea").textContent = "Mientras tanto: " + IDEAS[idea++ % IDEAS.length]; }, 4000);
-$("idea").textContent = "Mientras tanto: " + IDEAS[idea++];
-
+let nIdea = 0;
+const ponerIdea = () => { $("idea").textContent = "Mientras tanto: " + IDEAS[nIdea++ % IDEAS.length]; };
+ponerIdea();
+const relojIdeas = setInterval(ponerIdea, 4500);
+function avance(texto, pct) { $("carga-estado").textContent = texto; $("avance").style.width = pct + "%"; }
+function conLimite(p, s, que) {
+  return Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`${que}: sin respuesta en ${s} s`)), s * 1000))]);
+}
+async function cargarPyodide() {
+  let ultimo;
+  for (const carpeta of ["./", "py/"]) {          // los archivos de Python viajan con el sitio: sueltos o en py/
+    const url = new URL(carpeta, location.href).href;
+    try { return [await conLimite(import(url + "pyodide.mjs"), 30, carpeta + "pyodide.mjs"), url]; }
+    catch (e) { ultimo = e; }
+  }
+  throw ultimo;
+}
 async function iniciar() {
   try {
-    estado("Descargando Python (unos 12 MB la primera vez)…", 10);
-    med["Etapa"] = "1 · descargar el cargador de Python"; mostrarMedicion();
-    const [mod, url, version] = await cargarPyodide();
-    med["Origen de Python"] = url;
-    med["Etapa"] = "2 · iniciar Python (WebAssembly)"; mostrarMedicion();
-    const propio = version === "propio";
-    py = await conLimite(mod.loadPyodide(propio ? { indexURL: url, stdLibURL: url + "python_stdlib.zip.wasm" } : { indexURL: url }),
-                         120, "iniciar Python");
-    estado("Cargando la base de datos SQLite…", 55);
-    med["Etapa"] = "3 · cargar SQLite"; mostrarMedicion();
-    if (propio) {
-      const whl = new Uint8Array(await (await fetch(url + "sqlite3.whl.wasm")).arrayBuffer());
-      py.unpackArchive(whl, "zip", { extractDir: "/lib/python3.12/site-packages" });
-      await conLimite(py.runPythonAsync("import sqlite3"), 60, "cargar SQLite");
-    } else {
-      await conLimite(py.loadPackage("sqlite3"), 60, "cargar SQLite");
-    }
-    med["Etapa"] = "4 · cargar el núcleo contable"; mostrarMedicion();
+    avance("Descargando Python (unos 13 MB la primera vez)…", 10);
+    const [mod, url] = await cargarPyodide();
+    avance("Iniciando Python…", 35);
+    py = await conLimite(mod.loadPyodide({ indexURL: url, stdLibURL: url + "python_stdlib.zip.wasm" }), 120, "iniciar Python");
+    avance("Cargando SQLite…", 60);
+    const whl = new Uint8Array(await (await fetch(url + "sqlite3.whl.wasm")).arrayBuffer());
+    py.unpackArchive(whl, "zip", { extractDir: "/lib/python3.12/site-packages" });
+    med["Carga de Python"] = seg(performance.now() - t0);
+    avance("Cargando el núcleo contable…", 80);
     const t1 = performance.now();
-    med["Pyodide"] = version;
-    med["Carga de Python"] = seg(t1 - t0);
-    estado("Cargando el núcleo contable…", 75);
-    const empaquetado = await fetch("nucleo.json").then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    if (empaquetado) {
-      for (const [f, texto] of Object.entries(empaquetado)) {
-        const ruta = `/home/pyodide/pd/${f}`;
-        py.FS.mkdirTree(ruta.slice(0, ruta.lastIndexOf("/")));
-        py.FS.writeFile(ruta, texto);
-      }
-      med["Núcleo"] = "un solo archivo (nucleo.json)";
-    } else {
-    const rl = await fetch("archivos.txt");
-    if (!rl.ok) throw new Error("falta el archivo archivos.txt en el sitio");
-    const lista = (await rl.text()).trim().split(/\r?\n/);
-    const faltan = [];
-    await Promise.all(lista.map(async (f) => {
-      const nombre = `${f.replace("__init__.py", "init__.py")}.txt`;
-      let resp = await fetch(`nucleo/${nombre}`);   // en la carpeta nucleo/ o, si se subió suelto, junto a index.html
-      if (!resp.ok) resp = await fetch(nombre.split("/").pop());
-      if (!resp.ok) { faltan.push(`nucleo/${nombre}`); return; }
-      const texto = await resp.text();
+    const nucleo = await (await fetch("nucleo.json")).json();
+    for (const [f, texto] of Object.entries(nucleo)) {
       const ruta = `/home/pyodide/pd/${f}`;
       py.FS.mkdirTree(ruta.slice(0, ruta.lastIndexOf("/")));
       py.FS.writeFile(ruta, texto);
-    }));
-    if (faltan.length) throw new Error(`faltan ${faltan.length} archivo(s) del núcleo en el sitio: ${faltan.sort().join(", ")}`);
-    med["Núcleo"] = "archivo por archivo";
     }
     py.runPython(`import sys; sys.path.insert(0, "/home/pyodide/pd")\nimport web_pd`);
+    wp = py.globals.get("web_pd");
     med["Carga del núcleo contable"] = seg(performance.now() - t1);
     med["Total hasta estar listo"] = seg(performance.now() - t0);
-    med["Etapa"] = "lista";
-    clearInterval(relojIdeas); $("idea").textContent = "";
-    $("b-ejemplo").disabled = false; $("b-abrir").removeAttribute("aria-disabled");
-    estado("Listo. Abra un archivo .db o use la empresa de ejemplo.", 100);
+    clearInterval(relojIdeas);
+    $("carga").hidden = true;
+    mensaje("Listo. Abra una base de datos o use la empresa de ejemplo.");
   } catch (e) {
-    clearInterval(relojIdeas); $("idea").textContent = "";
-    estado("No se pudo preparar la aplicación: " + (e.message || e) + ". Toque «Copiar la medición» y péguela en la conversación.", 100, true);
-    med["Error"] = String(e.message || e);
+    clearInterval(relojIdeas);
+    avance("No se pudo preparar la aplicación: " + (e.message || e), 100);
+    $("carga-estado").style.color = "var(--mal)";
+    $("idea").textContent = "Pruebe recargar la página con Ctrl + F5. Si el problema sigue, copie este mensaje y envíelo.";
   }
   mostrarMedicion();
 }
 
+// ------------------------------------------------------------------ base de datos
 async function abrirBytes(bytes, nombre) {
-  if (!py) return;
-  estado(`Abriendo ${nombre}…`, null);
-  await new Promise((r) => setTimeout(r, 30));
+  if (sucio && !confirm("Hay cambios sin guardar en la base abierta. ¿Abrir otra igual y perderlos?")) return;
+  mensaje(`Abriendo ${nombre}…`); await espera();
   try {
     const t = performance.now();
     py.FS.writeFile("/tmp/empresa.db", bytes);
-    const r = JSON.parse(py.globals.get("web_pd").abrir("/tmp/empresa.db"));
+    const r = JSON.parse(wp.abrir("/tmp/empresa.db"));
+    nombreArchivo = nombre.replace(/\.(db|sqlite)$/i, "");
     med["Archivo"] = `${nombre} (${Math.round(bytes.length / 1024)} KB, ${r.asientos} asientos)`;
     med["Apertura de la base"] = seg(performance.now() - t);
-    const s = $("s-empresa");
-    s.innerHTML = r.empresas.map((e) => `<option value="${e.id}" data-i="${e.inicio}" data-c="${e.cierre}">${esc(e.codigo + " · " + e.nombre)}</option>`).join("");
-    for (const id of ["s-empresa", "s-informe", "f-desde", "f-hasta", "s-nivel", "b-ver"]) $(id).disabled = false;
-    fechasEmpresa();
-    estado(`Abierta: ${r.empresas.length} empresa(s), ${r.asientos} asientos.`, null);
+    $("s-empresa").innerHTML = r.empresas.map((e) => `<option value="${e.id}" data-i="${e.inicio}" data-c="${e.cierre}">${esc(e.codigo + " · " + e.nombre)}</option>`).join("");
+    $("s-empresa").disabled = false; $("b-guardar").disabled = false;
+    $("archivo-nombre").textContent = nombre;
+    marcarSucio(false);
+    elegirEmpresa();
+    mensaje(`Abierta: ${r.empresas.length} empresa(s), ${r.asientos} asientos.`);
+    if (document.querySelector("#v-inicio.activa")) ir("asientos");
   } catch (e) {
-    estado("No se pudo abrir el archivo: " + String(e.message || e).split("\n").filter(Boolean).pop(), null, true);
+    mensaje("No se pudo abrir el archivo: " + String(e.message || e).split("\n").filter(Boolean).pop());
   }
   mostrarMedicion();
 }
-function fechasEmpresa() {
+function elegirEmpresa() {
   const o = $("s-empresa").selectedOptions[0];
-  if (!o) return;
-  $("f-desde").value = o.dataset.i || ""; $("f-hasta").value = o.dataset.c || "";
+  emp = Number(o.value);
+  for (const id of ["a-desde", "c-desde"]) $(id).value = o.dataset.i || "";
+  for (const id of ["a-hasta", "c-hasta"]) $(id).value = o.dataset.c || "";
+  datos = llamar("datos_asiento", emp);
+  $("e-libro").innerHTML = datos.libros.map((l) => `<option value="${l.id}">${esc(l.texto)}</option>`).join("");
+  $("e-local").innerHTML = datos.locales.map((l) => `<option value="${l.id}">${esc(l.texto)}</option>`).join("");
+  $("dl-cuentas").innerHTML = datos.cuentas.map((c) => `<option value="${esc(c.codigo + " · " + c.nombre)}">`).join("");
+  const plan = llamar("plan", emp).cuentas;
+  $("dl-todas").innerHTML = plan.map((c) => `<option value="${esc(c.codigo + " · " + c.nombre)}">`).join("");
+  pintarFicha(); pintarPlan(plan); listarAsientos(); nuevoAsiento();
+  $("t-informe").innerHTML = ""; $("c-cabecera").innerHTML = ""; $("c-notas").textContent = "";
+}
+function guardarCopia() {
+  const ruta = wp.copia();
+  const blob = new Blob([py.FS.readFile(ruta)], { type: "application/octet-stream" });
+  const hoy = new Date().toISOString().slice(0, 10);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${nombreArchivo || "partida_doble"}_${hoy}.db`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  marcarSucio(false);
+  mensaje(`Se descargó ${a.download}. Esa copia es la que se entrega o se vuelve a abrir.`);
 }
 
-async function verInforme() {
-  estado("Calculando…", null);
-  await new Promise((r) => setTimeout(r, 30));
-  try {
-    const t = performance.now();
-    const r = JSON.parse(py.globals.get("web_pd").informe($("s-informe").value, Number($("s-empresa").value),
-      $("f-desde").value || null, $("f-hasta").value || null, $("s-nivel").value));
-    const tCalc = performance.now() - t;
-    pintar(r);
-    const tTotal = performance.now() - t;
-    med["Último informe"] = `${$("s-informe").selectedOptions[0].text}: ${r.filas.length} filas, cálculo ${seg(tCalc)}, en pantalla ${seg(tTotal)}`;
-    estado("Listo.", null);
-  } catch (e) {
-    estado("Error en el informe: " + String(e.message || e).split("\n").filter(Boolean).pop(), null, true);
-  }
-  mostrarMedicion();
+// ------------------------------------------------------------------ navegación
+function ir(v) {
+  if (!emp && v !== "acerca") v = "inicio";
+  document.querySelectorAll(".vista").forEach((s) => s.classList.toggle("activa", s.id === "v-" + v));
+  document.querySelectorAll("#pestanas button[data-v]").forEach((b) => b.classList.toggle("activa", b.dataset.v === v));
+  if (v === "acerca") mostrarMedicion();
 }
-function pintar(r) {
-  $("t-informe-res").hidden = false;
-  $("cabecera").innerHTML = `<h3>${esc(r.titulo)}</h3><p>${esc(r.subtitulo || "")}</p>`;
+
+// ------------------------------------------------------------------ configuración
+function pintarFicha() {
+  const r = llamar("ficha", emp);
+  $("ficha").innerHTML = r.filas.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+}
+let planActual = [];
+function pintarPlan(plan) {
+  if (plan) planActual = plan;
+  const q = $("plan-buscar").value.trim().toLowerCase();
+  const filas = planActual.filter((c) => !q || c.codigo.startsWith(q) || c.nombre.toLowerCase().includes(q));
+  $("t-plan").innerHTML = "<thead><tr><th>Código</th><th>Nombre</th><th>Tipo</th><th>Auxiliar</th><th>Moneda</th></tr></thead><tbody>" +
+    filas.map((c) => `<tr class="${c.imputable ? "" : "rubro"}"><td>${esc(c.codigo)}</td>` +
+      `<td style="padding-left:${7 + (c.nivel - 1) * 14}px">${esc(c.nombre)}</td><td>${c.imputable ? "Cuenta" : "Rubro"}</td>` +
+      `<td>${c.auxiliar === "C" ? "Clientes" : c.auxiliar === "P" ? "Proveedores" : ""}</td><td>${esc(c.moneda)}</td></tr>`).join("") + "</tbody>";
+  $("plan-cuenta").textContent = `${filas.length} de ${planActual.length} rubros y cuentas`;
+}
+
+// ------------------------------------------------------------------ asientos
+function listarAsientos() {
+  const r = llamar("lista_asientos", emp, $("a-desde").value, $("a-hasta").value, $("a-buscar").value);
+  if (r.error) { mensaje(r.error); return; }
+  $("t-asientos").innerHTML = "<thead><tr><th class='num'>Nº</th><th>Fecha</th><th>Concepto</th><th class='num'>Total</th></tr></thead><tbody>" +
+    r.asientos.map((a) => `<tr class="elegible${asientoActual === a.id ? " elegida" : ""}" data-id="${a.id}"><td class="num">${a.numero}</td>` +
+      `<td>${esc(a.fecha)}</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis">${esc(a.concepto)}</td><td class="num">${esc(a.total)}</td></tr>`).join("") + "</tbody>";
+  $("a-cuantos").textContent = `${r.asientos.length} asiento(s) en el período`;
+}
+function importe(t) {                     // misma regla que el núcleo: 1.234,56 · 1234.56 · 1.000
+  t = String(t || "").trim().replace(/\$|\s/g, "");
+  if (!t) return 0;
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+  else if ((t.match(/\./g) || []).length > 1 || /^\d{1,3}\.\d{3}$/.test(t)) t = t.replace(/\./g, "");
+  const v = Math.round(parseFloat(t) * 100);
+  return Number.isFinite(v) ? v : NaN;
+}
+const fmt = (c) => (c / 100).toLocaleString("es-UY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function cuentaDe(texto) {
+  const cod = String(texto || "").split(" ")[0].trim();
+  return datos.cuentas.find((c) => c.codigo === cod);
+}
+function renglon(l = {}) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td><input list="dl-cuentas" class="cta" value="${esc(l.cuenta ? l.cuenta + " · " + (l.nombre || "") : "")}"></td>` +
+    `<td><select class="ter"></select></td><td><input class="con" value="${esc(l.concepto || "")}"></td>` +
+    `<td><input class="imp debe" value="${esc(l.debe || "")}"></td><td><input class="imp haber" value="${esc(l.haber || "")}"></td>` +
+    `<td class="borrar"><button class="sec" type="button" title="Quitar el renglón">✕</button></td>`;
+  $("lineas").tBodies[0].appendChild(tr);
+  actualizarTercero(tr, l.tercero_id);
+  tr.querySelector(".cta").addEventListener("change", () => actualizarTercero(tr));
+  tr.querySelectorAll(".imp").forEach((i) => i.addEventListener("input", totales));
+  tr.querySelector(".borrar button").addEventListener("click", () => { tr.remove(); totales(); });
+  return tr;
+}
+function actualizarTercero(tr, elegido) {
+  const c = cuentaDe(tr.querySelector(".cta").value);
+  const sel = tr.querySelector(".ter");
+  const aux = c && c.auxiliar;
+  sel.disabled = !aux;
+  sel.innerHTML = aux ? `<option value="">— elegir ${aux === "C" ? "cliente" : "proveedor"} —</option>` +
+    datos.terceros.filter((t) => t.tipo === aux || t.tipo === "A").map((t) => `<option value="${t.id}">${esc(t.texto)}</option>`).join("") : "";
+  if (elegido) sel.value = String(elegido);
+}
+function totales() {
+  let d = 0, h = 0, mal = false;
+  for (const tr of $("lineas").tBodies[0].rows) {
+    const vd = importe(tr.querySelector(".debe").value), vh = importe(tr.querySelector(".haber").value);
+    if (Number.isNaN(vd) || Number.isNaN(vh)) mal = true; else { d += vd; h += vh; }
+  }
+  $("tot-debe").textContent = fmt(d); $("tot-haber").textContent = fmt(h);
+  $("tot-dif").textContent = mal ? "hay un importe que no es un número" : fmt(Math.abs(d - h)) + (d === h ? "" : d > h ? " (falta Haber)" : " (falta Debe)");
+  $("tot-dif").style.color = mal || d !== h ? "var(--mal)" : "var(--ok)";
+}
+function avisar(texto, tipo) { $("e-mensaje").innerHTML = texto ? `<div class="mensaje ${tipo}">${esc(texto)}</div>` : ""; }
+function nuevoAsiento() {
+  asientoActual = null;
+  $("e-titulo").textContent = "Asiento nuevo";
+  $("e-eliminar").disabled = true;
+  $("e-fecha").value = datos.ultima || $("a-hasta").value;
+  $("e-concepto").value = "";
+  $("lineas").tBodies[0].innerHTML = "";
+  renglon(); renglon();
+  totales(); avisar("");
+  document.querySelectorAll("#t-asientos tr.elegida").forEach((t) => t.classList.remove("elegida"));
+}
+function cargarAsiento(id) {
+  const a = llamar("asiento", id);
+  asientoActual = a.id;
+  $("e-titulo").textContent = `Asiento Nº ${a.numero}` + (a.tipo !== "NORMAL" ? ` (${a.tipo.toLowerCase()})` : "");
+  $("e-eliminar").disabled = false;
+  $("e-fecha").value = a.fecha; $("e-libro").value = a.libro_id; $("e-local").value = a.local_id;
+  $("e-concepto").value = a.concepto;
+  $("lineas").tBodies[0].innerHTML = "";
+  a.lineas.forEach((l) => renglon(l));
+  totales();
+  avisar(a.lineas.some((l) => l.moneda) ? "Este asiento tiene movimientos en moneda extranjera: se puede ver, pero se modifica en el programa de escritorio." : "", "error");
+  document.querySelectorAll("#t-asientos tr").forEach((t) => t.classList.toggle("elegida", Number(t.dataset.id) === a.id));
+}
+function registrar() {
+  const lineas = [...$("lineas").tBodies[0].rows].map((tr) => ({
+    cuenta: tr.querySelector(".cta").value, tercero_id: tr.querySelector(".ter").value || null,
+    concepto: tr.querySelector(".con").value, debe: tr.querySelector(".debe").value, haber: tr.querySelector(".haber").value,
+  }));
+  const r = llamar("guardar", JSON.stringify({
+    emp, asiento_id: asientoActual, fecha: $("e-fecha").value, libro_id: $("e-libro").value, local_id: $("e-local").value,
+    concepto: $("e-concepto").value, lineas,
+  }));
+  if (r.error) { avisar(r.error, "error"); return; }
+  marcarSucio(true);
+  datos.ultima = $("e-fecha").value;
+  const eraNuevo = !asientoActual;
+  listarAsientos();
+  if (eraNuevo) { nuevoAsiento(); avisar(`Asiento Nº ${r.numero} registrado. Puede cargar el siguiente.`, "ok"); }
+  else { cargarAsiento(r.id); avisar(`Asiento Nº ${r.numero} modificado.`, "ok"); }
+}
+function eliminar() {
+  if (!asientoActual || !confirm("¿Eliminar este asiento? Se puede volver atrás solo abriendo la última copia guardada.")) return;
+  const r = llamar("eliminar", asientoActual);
+  if (r.error) { avisar(r.error, "error"); return; }
+  marcarSucio(true);
+  listarAsientos(); nuevoAsiento();
+  avisar(`Asiento Nº ${r.numero} eliminado.`, "ok");
+}
+
+// ------------------------------------------------------------------ consultas
+function verInforme() {
+  const tipo = $("c-informe").value;
+  mensaje("Calculando…");
+  const t = performance.now();
+  const r = JSON.parse(wp.informe(tipo, emp, $("c-desde").value || null, $("c-hasta").value || null, $("c-nivel").value, $("c-cuenta").value));
+  if (r.error) { mensaje(r.error); $("c-cabecera").innerHTML = `<div class="mensaje error">${esc(r.error)}</div>`; $("t-informe").innerHTML = ""; return; }
+  $("c-cabecera").innerHTML = `<b>${esc(r.titulo)}</b> <span class="nota">${esc(r.subtitulo || "")}</span>`;
   const tipos = r.columnas.map((c) => c[1]);
-  const primeraTexto = tipos.findIndex((t) => t === "texto");
-  let h = "<thead><tr>" + r.columnas.map(([n, t]) => `<th class="${t === "importe" ? "num" : ""}">${esc(n)}</th>`).join("") + "</tr></thead><tbody>";
+  const primera = tipos.findIndex((x) => x === "texto");
+  let h = "<thead><tr>" + r.columnas.map(([n, tp]) => `<th class="${tp === "importe" ? "num" : ""}">${esc(n)}</th>`).join("") + "</tr></thead><tbody>";
   for (const [estilo, nivel, valores] of r.filas) {
     h += `<tr class="${estilo}">` + valores.map((v, j) => {
-      const cls = tipos[j] === "importe" ? "num" : (j === primeraTexto ? "texto" : "");
-      const sangria = j === primeraTexto && nivel ? ` style="padding-left:${8 + nivel * 12}px"` : "";
+      const cls = tipos[j] === "importe" ? "num" : j === primera ? "texto" : "";
+      const sangria = j === primera && nivel ? ` style="padding-left:${7 + nivel * 12}px"` : "";
       return `<td class="${cls}"${sangria}>${esc(v)}</td>`;
     }).join("") + "</tr>";
   }
-  $("tabla").innerHTML = h + "</tbody>";
-  $("notas").innerHTML = r.notas.map((n) => `<div>${esc(n)}</div>`).join("");
-  $("t-informe-res").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("t-informe").innerHTML = h + "</tbody>";
+  $("c-notas").innerHTML = r.notas.map((n) => `<div>${esc(n)}</div>`).join("");
+  med["Último informe"] = `${$("c-informe").selectedOptions[0].text}: ${r.filas.length} filas en ${seg(performance.now() - t)}`;
+  mensaje("Listo.");
 }
 
+// ------------------------------------------------------------------ eventos
+document.querySelectorAll("#pestanas button[data-v]").forEach((b) => b.addEventListener("click", () => ir(b.dataset.v)));
+$("b-abrir").addEventListener("click", () => py && $("archivo").click());
 $("archivo").addEventListener("change", async (ev) => {
   const f = ev.target.files[0];
   if (f) await abrirBytes(new Uint8Array(await f.arrayBuffer()), f.name);
   ev.target.value = "";
 });
-$("b-abrir").addEventListener("click", (ev) => { if (!py) ev.preventDefault(); });
 $("b-ejemplo").addEventListener("click", async () => {
+  if (!py) return;
   const partes = await (await fetch("ejemplo.json")).json();
   const bin = atob(partes.join(""));
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   await abrirBytes(bytes, "ejemplo_comercial_2026.db");
 });
-$("s-empresa").addEventListener("change", fechasEmpresa);
-$("b-ver").addEventListener("click", verInforme);
-$("b-copiar").addEventListener("click", async () => {
-  const texto = Object.entries(med).map(([k, v]) => `${k}: ${v}`).join("\n");
-  try { await navigator.clipboard.writeText(texto); $("copiado").textContent = "Copiado. Péguelo en la conversación."; }
-  catch { $("copiado").textContent = "El navegador no dejó copiar; puede seleccionar el texto de arriba."; }
+$("b-guardar").addEventListener("click", guardarCopia);
+$("s-empresa").addEventListener("change", elegirEmpresa);
+$("plan-buscar").addEventListener("input", () => pintarPlan());
+for (const id of ["a-desde", "a-hasta"]) $(id).addEventListener("change", listarAsientos);
+$("a-buscar").addEventListener("input", listarAsientos);
+$("t-asientos").addEventListener("click", (ev) => { const tr = ev.target.closest("tr[data-id]"); if (tr) cargarAsiento(Number(tr.dataset.id)); });
+$("e-nuevo").addEventListener("click", nuevoAsiento);
+$("e-renglon").addEventListener("click", () => renglon().querySelector(".cta").focus());
+$("e-registrar").addEventListener("click", registrar);
+$("e-eliminar").addEventListener("click", eliminar);
+$("c-informe").addEventListener("change", () => {
+  const mayor = $("c-informe").value === "mayor", diario = $("c-informe").value === "diario";
+  $("c-cuenta-l").hidden = !mayor; $("c-nivel-l").hidden = mayor || diario;
 });
-addEventListener("error", (e) => { med["Error de la página"] = String(e.message || e); mostrarMedicion(); });
-addEventListener("unhandledrejection", (e) => { med["Error de la página"] = String(e.reason && e.reason.message || e.reason); mostrarMedicion(); });
-if ("serviceWorker" in navigator && location.protocol === "https:") {
-  navigator.serviceWorker.register("sw.js").then(() => { med["Sin conexión"] = "preparado"; })
-    .catch(() => { med["Sin conexión"] = "no disponible en este sitio"; });
-}
-mostrarMedicion();
+$("c-ver").addEventListener("click", verInforme);
+$("b-copiar").addEventListener("click", async () => {
+  mostrarMedicion();
+  const texto = Object.entries(med).map(([k, v]) => `${k}: ${v}`).join("\n");
+  try { await navigator.clipboard.writeText(texto); $("copiado").textContent = "Copiado."; }
+  catch { $("copiado").textContent = "El navegador no dejó copiar: seleccione el texto de arriba."; }
+});
+addEventListener("beforeunload", (e) => { if (sucio) { e.preventDefault(); e.returnValue = ""; } });
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+ir("inicio");
 iniciar();
 </script>
 </body>
