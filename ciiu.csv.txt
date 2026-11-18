@@ -1,0 +1,797 @@
+seccion;codigo;descripcion;giro
+A;01110;Cultivo de cereales (excepto arroz), legumbres y semillas oleaginosas;Producción agropecuaria, caza y actividades de servicios conexas
+A;01120;Cultivo de arroz;Producción agropecuaria, caza y actividades de servicios conexas
+A;01130;Cultivo de hortalizas de hojas y/o que dan frutos, raíces y tubérculos;Producción agropecuaria, caza y actividades de servicios conexas
+A;01131;Cultivos de hortalizas hidropónicas;Producción agropecuaria, caza y actividades de servicios conexas
+A;01132;Cultivos de hortalizas no hidropónicas;Producción agropecuaria, caza y actividades de servicios conexas
+A;01133;Cultivo de papa;Producción agropecuaria, caza y actividades de servicios conexas
+A;01139;Otros cultivo de raíces y tubérculos (excepto papa);Producción agropecuaria, caza y actividades de servicios conexas
+A;01140;Cultivo de caña de azúcar;Producción agropecuaria, caza y actividades de servicios conexas
+A;01150;Cultivo de tabaco;Producción agropecuaria, caza y actividades de servicios conexas
+A;01160;Cultivo de fibras;Producción agropecuaria, caza y actividades de servicios conexas
+A;01190;Cultivo de otros productos no perennes;Producción agropecuaria, caza y actividades de servicios conexas
+A;01191;Cultivo de forrajes;Producción agropecuaria, caza y actividades de servicios conexas
+A;01199;Cultivo de flores: corte, brotes y semillas de flores y otros cultivos no perennes;Producción agropecuaria, caza y actividades de servicios conexas
+A;01210;Cultivo de uvas;Producción agropecuaria, caza y actividades de servicios conexas
+A;01220;Cultivo de frutas tropicales y subtropicales;Producción agropecuaria, caza y actividades de servicios conexas
+A;01230;Cultivo de frutas cítricas;Producción agropecuaria, caza y actividades de servicios conexas
+A;01240;Cultivo de frutas con pepita y con hueso (ej. manzanas, duraznos, peras, ciruelas, pelones, membrillos, etc.);Producción agropecuaria, caza y actividades de servicios conexas
+A;01250;Cultivo de otras frutas y frutos secos arbóreos y de arbustos (ej. nueces, arándanos, moras, etc.);Producción agropecuaria, caza y actividades de servicios conexas
+A;01260;Cultivo de frutas oleaginosas (ej. coco, aceitunas, etc.);Producción agropecuaria, caza y actividades de servicios conexas
+A;01270;Cultivo de plantas para preparar bebidas;Producción agropecuaria, caza y actividades de servicios conexas
+A;01280;Cultivo de especias y plantas aromáticas, medicinales y farmacéuticas;Producción agropecuaria, caza y actividades de servicios conexas
+A;01290;Cultivos de otros productos perennes;Producción agropecuaria, caza y actividades de servicios conexas
+A;01300;Propagación de plantas;Producción agropecuaria, caza y actividades de servicios conexas
+A;01410;Cría de ganado vacuno y búfalos;Ganaderia
+A;01411;Cría de ganado vacuno con destino a producción de carne;Ganaderia
+A;01412;Cría de ganado vacuno lechero ( con producción de leche para industria);Ganaderia
+A;01413;Cría de ganado vacuno lechero ( con producción de leche sin destino industrial);Ganaderia
+A;01414;Producción de semen bovino;Ganaderia
+A;01419;Otras producciones de ganados vacunos no incluidas en las anteriores.;Ganaderia
+A;01420;Cría de caballos y otros equinos;Ganaderia
+A;01430;Cría de camellos y camélidos;Ganaderia
+A;01440;Cría de ovejas y cabras;Ganaderia
+A;01450;Cría de ganado porcino;Ganaderia
+A;01460;Cría de aves de corral y producción de huevos;Ganaderia
+A;01461;Cría de aves de corral para su venta;Ganaderia
+A;01469;Producción de huevos;Ganaderia
+A;01490;Cría de otros animales;Ganaderia
+A;01491;Apicultura: producción de cera y miel de abeja.;Ganaderia
+A;01492;Cría de ñandúes;Ganaderia
+A;01493;Cría de conejos;Ganaderia
+A;01499;Cría de otros animales n.c.p., excepto apicultura, ñandúes y conejos;Ganaderia
+A;01500;Explotación agropecuaria mixta;Ganaderia
+A;01610;Actividades de apoyo a la agricultura;Ganaderia
+A;01611;Servicios de fumigación y riego;Ganaderia
+A;01612;Servicios de provisión de maquinaria agrícola con operarios y personal.;Ganaderia
+A;01619;Otros servicios de apoyo a la agricultura;Ganaderia
+A;01620;Actividades de apoyo a la ganadería;Ganaderia
+A;01621;Servicios de esquila.;Ganaderia
+A;01629;Otros servicios de apoyo a la ganadería n.c.p.;Ganaderia
+A;01630;Actividades posteriores a la cosecha;Ganaderia
+A;01640;Procesamiento de semillas para la propagación;Ganaderia
+A;01700;Caza ordinaria, mediante trampas y actividades de servicio conexas;Ganaderia
+A;02100;Forestación y otras actividades relacionadas a la forestación;Forestación y extracción de madera
+A;02101;Viveros de árboles forestales;Forestación y extracción de madera
+A;02102;Explotación de bosques;Forestación y extracción de madera
+A;02109;Otras actividades relacionadas a la forestación n.c.p.;Forestación y extracción de madera
+A;02200;Extracción de madera;Forestación y extracción de madera
+A;02300;Recolección de productos forestales diferentes a la madera;Forestación y extracción de madera
+A;02400;Servicio de apoyo a la forestación;Forestación y extracción de madera
+A;03110;Pesca marítima;Pesca y Acuicultura
+A;03111;Pesca marina artesanal;Pesca y Acuicultura
+A;03119;Pesca marina de altura y otras capturas marinas;Pesca y Acuicultura
+A;03120;Pesca de agua dulce;Pesca y Acuicultura
+A;03200;Acuicultura;Pesca y Acuicultura
+A;03210;Acuicultura marítima;Pesca y Acuicultura
+A;03220;Acuicultura de agua dulce;Pesca y Acuicultura
+B;05100;Extracción y aglomeración de hulla;Explotación de minas y canteras
+B;05200;Extracción y aglomeración de lignito;Explotación de minas y canteras
+B;06100;Extracción de petroleo crudo;Explotación de minas y canteras
+B;06200;Extracción de gas natural;Explotación de minas y canteras
+B;07100;Extracción de minerales de hierro;Explotación de minas y canteras
+B;07210;Extracción de minerales de uranio y torio;Explotación de minas y canteras
+B;07290;Extracción de otros minerales metalíferos no ferrosos n.c.p.;Explotación de minas y canteras
+B;08110;Extracción de arena, arcilla, canto rodado, tierra y conchilla.;Explotación de minas y canteras
+B;08120;Extracción, estrujado y quebrado de piedra caliza. Caleras.;Explotación de minas y canteras
+B;08130;Extracción de rocas ornamentales;Explotación de minas y canteras
+B;08190;Extracción de yeso y de otros tipos de piedras en canteras;Explotación de minas y canteras
+B;08910;Extracción de minerales para la fabricación de fertilizantes y productos químicos;Explotación de minas y canteras
+B;08920;Extracción y aglomeración de turba;Explotación de minas y canteras
+B;08930;Extracción de sal;Explotación de minas y canteras
+B;08990;Explotación de otras minas y canteras n.c.p.;Explotación de minas y canteras
+B;08991;Extracción de gemas naturales, piedras preciosas o semipreciosas: ágatas y amatistas;Explotación de minas y canteras
+B;08999;Explotación de otras minas y canteras n.c.p.;Explotación de minas y canteras
+B;09100;Actividades de apoyo a la extracción de petroleo y gas natural;Explotación de minas y canteras
+B;09900;Actividades de apoyo a la explotación de otras minas y canteras;Explotación de minas y canteras
+C;10110;Matanza de ganado y otros animales (excepto aves) conservación y preparación de sus carnes;Industrias Manufactureras
+C;10111;Matanza de ganado vacuno, ovino, porcino y equino distinta de la realizada por los frigoríficos. (Abasto);Industrias Manufactureras
+C;10112;Matanza de ganado vacuno, ovino, porcino y equino en frigoríficos;Industrias Manufactureras
+C;10119;Matanza de otros animales n.c.p., excepto aves;Industrias Manufactureras
+C;10120;Elaboración de fiambres y chacinados;Industrias Manufactureras
+C;10130;Matanza, preparación y conservación de pollos y gallinas;Industrias Manufactureras
+C;10190;Matanza, procesamiento y conservación de carne de ñandúes y otras aves n.c.p.;Industrias Manufactureras
+C;10200;Procesamiento y conservación de pescados, crustáceos y mariscos;Industrias Manufactureras
+C;10300;Procesamiento y conservación de frutas y vegetales;Industrias Manufactureras
+C;10400;Elaboración de aceites y grasas de origen vegetal y animal;Industrias Manufactureras
+C;10500;Elaboración de productos lacteos;Industrias Manufactureras
+C;10501;Elaboración de productos lacteos en general;Industrias Manufactureras
+C;10509;Elaboración de helados;Industrias Manufactureras
+C;10610;Elaboración de productos de molinería;Industrias Manufactureras
+C;10611;Elaboración de productos de molinería de arroz y elaboración de aceite de arroz;Industrias Manufactureras
+C;10612;Elaboración de harina de trigo y otros productos derivados de la molienda de trigo.;Industrias Manufactureras
+C;10619;Elaboración de otros productos de molinería de cereales, excepto del arroz y trigo.;Industrias Manufactureras
+C;10620;Elaboración de almidones y productos elaborados del almidón;Industrias Manufactureras
+C;10710;Elaboración de productos de panadería;Industrias Manufactureras
+C;10711;Elaboración de pan, productos panificados en forma tradicional;Industrias Manufactureras
+C;10712;Elaboración de productos de confitería;Industrias Manufactureras
+C;10719;Elaboración de otros productos panificados realizados en fábricas;Industrias Manufactureras
+C;10720;Elaboración de azúcar;Industrias Manufactureras
+C;10730;Elaboración de cacao, chocolate y confites;Industrias Manufactureras
+C;10731;Elaboración de chocolate;Industrias Manufactureras
+C;10739;Elaboración de cacao (excepto para producir chocolate) y confites;Industrias Manufactureras
+C;10740;Elaboración de pastas, fideos;Industrias Manufactureras
+C;10741;Elaboración de pastas secas;Industrias Manufactureras
+C;10749;Elaboración de pastas frescas;Industrias Manufactureras
+C;10750;Elaboración de comidas y platos preparados;Industrias Manufactureras
+C;10790;Elaboración de otros productos alimenticios;Industrias Manufactureras
+C;10791;Producción de hielo;Industrias Manufactureras
+C;10799;Elaboración de otros productos alimenticios n.c.p.;Industrias Manufactureras
+C;10800;Elaboración de alimentos preparados para animales;Industrias Manufactureras
+C;11110;Elaboración de bebidas;Elaboración de bebidas
+C;11010;Destilación, rectificación y mezcla de bebidas alcoholicas;Elaboración de bebidas
+C;11020;Elaboración de vinos;Elaboración de bebidas
+C;11030;Elaboración de bebidas malteadas y de malta;Elaboración de bebidas
+C;11040;Elaboración de bebidas no alcoholicas, producción de aguas minerales y otras aguas embotelladas;Elaboración de bebidas
+C;12000;Elaboración de productos de tabaco;Elaboración de bebidas
+C;13110;Preparación e hilandería de fibras textiles;Fabricación de productos textiles
+C;13111;Elaboración de tops de lana;Fabricación de productos textiles
+C;13119;Otras preparaciones e hilandería de fibras textiles, excepto tops;Fabricación de productos textiles
+C;13120;Tejeduría de productos textiles;Fabricación de productos textiles
+C;13130;Acabado de productos textiles;Fabricación de productos textiles
+C;13910;Fabricación de tejidos y tela de punto (Crochet o Ganchillo);Fabricación de productos textiles
+C;13920;Fabricación de artículos confeccionados con materiales textiles, excepto prendas de vestir;Fabricación de productos textiles
+C;13930;Fabricación de tapices y alfombras;Fabricación de productos textiles
+C;13940;Fabricación de cuerdas, cordeles, bramantes y redes;Fabricación de productos textiles
+C;13990;Fabricación de otros productos textiles n.c.p.;Fabricación de productos textiles
+C;14100;Fabricación de prendas de vestir, excepto prendas de piel;Fabricación de prendas de vestir
+C;14101;Fabricación de prendas de vestir exteriores, excepto prendas de piel;Fabricación de prendas de vestir
+C;14102;Fabricación de ropa interior;Fabricación de prendas de vestir
+C;14103;Fabricación de prendas de vestir de cuero;Fabricación de prendas de vestir
+C;14104;Fabricación de prendas de vestir de trabajo;Fabricación de prendas de vestir
+C;14109;Fabricación de otras prendas de vestir n.c.p. y accesorios;Fabricación de prendas de vestir
+C;14200;Fabricación de artículos de piel;Fabricación de prendas de vestir
+C;14300;Fabricación de prendas de tejido de punto y ganchillo;Fabricación de prendas de vestir
+C;15110;"Curtido y adobo de cueros; adobo y teñido de pieles";Fabricación de cueros y productos conexos
+C;15120;Fabricación de maletas, bolsos de mano, y artículos de talabartería y guarnicionería;Fabricación de cueros y productos conexos
+C;15121;Fabricación de cubre asientos en cuero, cortados o enteros, para la industria automotriz.;Fabricación de cueros y productos conexos
+C;15122;Fabricación de accesorios de cuero y de materiales similares;Fabricación de cueros y productos conexos
+C;15123;Fabricación de artículos de talabartería;Fabricación de cueros y productos conexos
+C;15129;Fabricación de otros artículos de cuero n.c.p.;Fabricación de cueros y productos conexos
+C;15200;Fabricación de calzado;Fabricación de cueros y productos conexos
+C;16101;Chipeado de madera;"Producción de madera y fabricación de productos de madera y corcho, excepto muebles; fabricación de artículos de paja y de materiales trenzables"
+C;16102;Aserrado, cepillado y trabajo a máquina de la madera;"Producción de madera y fabricación de productos de madera y corcho, excepto muebles; fabricación de artículos de paja y de materiales trenzables"
+C;16109;Otras actividades no comprendidas en las anteriores;"Producción de madera y fabricación de productos de madera y corcho, excepto muebles; fabricación de artículos de paja y de materiales trenzables"
+C;16210;Fabricación de hojas de madera para enchapado y paneles a base de madera, etc.;"Producción de madera y fabricación de productos de madera y corcho, excepto muebles; fabricación de artículos de paja y de materiales trenzables"
+C;16220;Fabricación de partes y piezas de carpintería para edificios y construcciones;"Producción de madera y fabricación de productos de madera y corcho, excepto muebles; fabricación de artículos de paja y de materiales trenzables"
+C;16230;Fabricación de recipientes de madera;"Producción de madera y fabricación de productos de madera y corcho, excepto muebles; fabricación de artículos de paja y de materiales trenzables"
+C;16290;"Fabricación de otros productos de madera; fabricación de artículos de corcho, paja y materiales trenzables.";"Producción de madera y fabricación de productos de madera y corcho, excepto muebles; fabricación de artículos de paja y de materiales trenzables"
+C;17010;Fabricación de pasta de celulosa, papel y cartón;Fabricación de papel y de los productos de papel
+C;17011;Fabricación de pasta de celulosa;Fabricación de papel y de los productos de papel
+C;17012;Fabricación de papel y cartón;Fabricación de papel y de los productos de papel
+C;17019;Fabricación de otros productos vinculados a la producción de papel y cartón n.c.p.;Fabricación de papel y de los productos de papel
+C;17020;Fabricación de papel y cartón ondulado y de envases de papel y cartón;Fabricación de papel y de los productos de papel
+C;17090;Fabricación de otros artículos de papel y cartón n.c.p.;Fabricación de papel y de los productos de papel
+C;18110;Actividades de impresión;Actividades de impresión y reproducción de grabaciones
+C;18111;Actividades de impresión de diarios y revistas.;Actividades de impresión y reproducción de grabaciones
+C;18119;Otras actividades de impresión, grabación y reproducción, excepto serigrafía sobre textiles;Actividades de impresión y reproducción de grabaciones
+C;18120;Servicios relacionados con la impresión;Actividades de impresión y reproducción de grabaciones
+C;18200;Reproducciones de grabaciones;Fabricación de coque y de productos de la refinación del petróleo
+C;19100;Fabricación de productos de horno de coque;Fabricación de coque y de productos de la refinación del petróleo
+C;19200;Fabricación de los productos de la refinación del petroleo;Fabricación de coque y de productos de la refinación del petróleo
+C;19201;Refinación del petroleo: combustibles;Fabricación de coque y de productos de la refinación del petróleo
+C;19202;Fabricación de aceites, grasas y lubricantes;Fabricación de coque y de productos de la refinación del petróleo
+C;19209;Fabricación de otros productos de la refinación del petroleo n.c.p.;Fabricación de coque y de productos de la refinación del petróleo
+C;20110;Fabricación de sustancias químicas básicas y biocombustibles;Fabricación de sustancias y productos químicos
+C;20120;Fabricación de abonos y compuestos de nitrógeno;Fabricación de sustancias y productos químicos
+C;20130;Fabricación de plásticos y de caucho sintético en formas primarias;Fabricación de sustancias y productos químicos
+C;20210;Fabricación de pesticidas y de otros productos químicos de uso agropecuario.;Fabricación de sustancias y productos químicos
+C;20220;Fabricación de pinturas, barnices y productos de revestimiento similares, tintas de imprenta y masillas;Fabricación de sustancias y productos químicos
+C;20230;Fabricación de jabones y detergentes, preparados para limpiar y pulir, perfumes y artículos de tocador;Fabricación de sustancias y productos químicos
+C;20231;Fabricación de jabones, detergentes y preparados de limpieza;Fabricación de sustancias y productos químicos
+C;20232;Fabricación de cosméticos, perfumes y artículos de tocador;Fabricación de sustancias y productos químicos
+C;20239;Fabricación de otros preparados para limpiar y pulir n.c.p.;Fabricación de sustancias y productos químicos
+C;20290;Fabricación de otros productos químicos n.c.p.;Fabricación de sustancias y productos químicos
+C;20300;Fabricacion de fibras manufacturadas;Fabricación de sustancias y productos químicos
+C;21000;Fabricación de productos farmacéuticos, sustancias químicas medicinales y de productos botánicos;Fabricación de sustancias y productos químicos
+C;22110;"Fabricación de cubiertas y cámaras de caucho; recauchutado y renovación de cubiertas de caucho";Fabricación de productos de caucho
+C;22111;Fabricación de cubiertas y cámaras de caucho;Fabricación de productos de caucho
+C;22119;Recauchutaje y renovación de cubiertas de caucho;Fabricación de productos de caucho
+C;22190;Fabricación de otros productos de caucho;Fabricación de productos de caucho
+C;22200;Fabricación de productos de plástico;Fabricación de productos de plástico
+C;22201;Fabricación de productos de plástico para la construcción;Fabricación de productos de plástico
+C;22202;Fabricación de laminados planos y tubulares de materiales plásticos;Fabricación de productos de plástico
+C;22203;Fabricación de productos de plástico moldeado;Fabricación de productos de plástico
+C;22209;Fabricación de otros productos de plástico n.c.p.;Fabricación de productos de plástico
+C;23100;Fabricación de vidrio y de productos de vidrio;Fabricación de otros productos minerales no metálicos
+C;23910;Fabricación de productos refractarios;Fabricación de otros productos minerales no metálicos
+C;23920;Fabricación de materiales de arcilla para la construcción;Fabricación de otros productos minerales no metálicos
+C;23930;Fabricación de otros productos de cerámica y porcelana;Fabricación de otros productos minerales no metálicos
+C;23940;Fabricación de cemento, cal y yeso;Fabricación de otros productos minerales no metálicos
+C;23950;Fabricación de artículos de hormigón, de cemento y de yeso;Fabricación de otros productos minerales no metálicos
+C;23960;Corte, tallado y acabado de la piedra;Fabricación de otros productos minerales no metálicos
+C;23990;Fabricación de otros productos minerales no metálicos n.c.p.;Fabricación de otros productos minerales no metálicos
+C;24100;Industrias básicas de hierro y acero;Fabricación de metales comunes
+C;24200;Fabricación de productos primarios de metales preciosos y metales no ferrosos;Fabricación de metales comunes
+C;24300;Fundición de hierro y acero y de metales no ferrosos;Fabricación de metales comunes
+C;25110;Fabricación de productos metálicos para uso estructural;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25120;Fabricación de tanques, depósitos y recipientes de metal;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25130;Fabricación de los generadores de vapor, excepto calderas de agua caliente para calefacción central;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25200;Fabricación de armas y municiones;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25910;"Forja, prensado, estampado y laminado de metales; pulvimetalurgia";Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25920;Fabricación, tratamiento y revestimiento de metales;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25921;Talleres de tornería;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25929;Otro tipo de fabricación, tratamiento y revestimiento de metales;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25930;Fabricación de artículos de cuchillería, herramientas de mano y artículos de ferretería;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25931;Fabricación de herrajes y cerraduras;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25939;Fabricación de artículos de cuchillería, herramientas de mano y artículos de ferretería;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25990;Fabricación de otros productos elaborados de metal n.c.p.;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25991;Fabricación de productos de alambre y otros artículos para la construcción;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25992;Fabricación de artículos de metal para uso doméstico;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;25999;Fabricación de otros productos de metal n.c.p.;Fabricación de productos derivados del metal, excepto maquinaria y equipo
+C;26100;Fabricación de productos electrónicos;Fabricación de los productos informáticos, electrónicos y ópticos
+C;26200;Fabricación de computadoras y equipo periférico;Fabricación de los productos informáticos, electrónicos y ópticos
+C;26300;Fabricación de equipos de comunicaciones;Fabricación de los productos informáticos, electrónicos y ópticos
+C;26400;Fabricación de aparatos de consumo eléctrico;Fabricación de los productos informáticos, electrónicos y ópticos
+C;26510;Fabricación de equipos para medir, verificar y navegar y de equipos de control;Fabricación de los productos informáticos, electrónicos y ópticos
+C;26520;Fabricación de todo tipo de relojes;Fabricación de los productos informáticos, electrónicos y ópticos
+C;26600;Fabricación de equipos radiológicos, electromédicos y electroterapeúticos;Fabricación de los productos informáticos, electrónicos y ópticos
+C;26700;Fabricación de instrumentos ópticos y equipo fotográfico;Fabricación de los productos informáticos, electrónicos y ópticos
+C;26800;Fabricación de soportes magnéticos y ópticos;Fabricación de los productos informáticos, electrónicos y ópticos
+C;27100;Fabricación de motores electricos, generadores, transformadores eléctricos, distribución de la electricidad y aparatos de control;Fabricación de equipo eléctrico
+C;27200;Fabricación de baterías y acumuladores;Fabricación de equipo eléctrico
+C;27310;Fabricación de cables de fibra óptica;Fabricación de equipo eléctrico
+C;27320;Fabricación de otros cables eléctricos y electrónicos;Fabricación de equipo eléctrico
+C;27330;Fabricación de dispositivos de cableado;Fabricación de equipo eléctrico
+C;27400;Fabricación de equipos de iluminación eléctricos;Fabricación de equipo eléctrico
+C;27500;Fabricación de aparatos de uso doméstico;Fabricación de equipo eléctrico
+C;27900;Fabricación de otros equipos eléctricos;Fabricación de equipo eléctrico
+C;28110;Fabricación de motores y turbinas, excepto motores para aeronaves, vehículos automotores y motocicletas.;Fabricación de la maquinaria y equipo n.c.p.
+C;28120;Fabricación de equipos hidráulicos;Fabricación de la maquinaria y equipo n.c.p.
+C;28130;Fabricación de bombas, compresores, grifos y válvulas;Fabricación de la maquinaria y equipo n.c.p.
+C;28140;Fabricación de cojinetes, engranajes, trenes de engranajes y piezas de transmisión;Fabricación de la maquinaria y equipo n.c.p.
+C;28150;Fabricación de hornos, hogares y quemadores;Fabricación de la maquinaria y equipo n.c.p.
+C;28160;Fabricación de equipo de elevación y manipulación;Fabricación de la maquinaria y equipo n.c.p.
+C;28170;Fabricación de maquinaria y equipo de oficina (excepto computadoras y equipos periféricos);Fabricación de la maquinaria y equipo n.c.p.
+C;28180;Fabricación de herramientas manuales;Fabricación de la maquinaria y equipo n.c.p.
+C;28190;Fabricación de otros tipos de maquinaria de uso general;Fabricación de la maquinaria y equipo n.c.p.
+C;28210;Fabricación de maquinaria agropecuaria y forestal;Fabricación de la maquinaria y equipo n.c.p.
+C;28220;Fabricación de maquinarias para trabajar metales y máquinas herramientas;Fabricación de la maquinaria y equipo n.c.p.
+C;28230;Fabricación de maquinaria para la industria metalúrgica;Fabricación de la maquinaria y equipo n.c.p.
+C;28240;Fabricación de maquinaria para explotación de minas y canteras y para obras de construcción;Fabricación de la maquinaria y equipo n.c.p.
+C;28250;Fabricación de maquinaria para la elaboración de alimentos, bebidas y tabaco;Fabricación de la maquinaria y equipo n.c.p.
+C;28260;Fabricación de maquinaria para la elaboración de productos textiles, prendas de vestir y cueros.;Fabricación de la maquinaria y equipo n.c.p.
+C;28290;Fabricación de otros tipos de maquinaria de uso especial;Fabricación de la maquinaria y equipo n.c.p.
+C;29100;Fabricación de vehículos automotores;Fabricación de vehículos automotores, remolques y semiremolques
+C;29200;Fabricación de carrocerías para vehículos automotores, fabricación de remolques y semirremolques;Fabricación de vehículos automotores, remolques y semiremolques
+C;29300;Fabricación de partes y accesorios para motores de vehículos automotores;Fabricación de vehículos automotores, remolques y semiremolques
+C;30110;Construcción de buques y estructuras flotantes;Fabricación de vehículos automotores, remolques y semiremolques
+C;30120;Construcción de embarcaciones de recreo y deporte;Fabricación de vehículos automotores, remolques y semiremolques
+C;30200;Fabricación de locomotorasy de material rodante para ferrocarriles y tranvías;Fabricación de vehículos automotores, remolques y semiremolques
+C;30300;Fabricación de aeronaves , naves espaciales y de maquinaria conexa;Fabricación de vehículos automotores, remolques y semiremolques
+C;30400;Fabricación de vehículos militares de combate;Fabricación de vehículos automotores, remolques y semiremolques
+C;30910;Fabricación de motocicletas;Fabricación de vehículos automotores, remolques y semiremolques
+C;30920;Fabricación de bicicletas y sillas de ruedas para inválidos;Fabricación de vehículos automotores, remolques y semiremolques
+C;30990;Fabricación de otros tipos de equipo de transporte n.c.p.;Fabricación de vehículos automotores, remolques y semiremolques
+C;31000;Fabricación de muebles;Fabricación de vehículos automotores, remolques y semiremolques
+C;31001;Fabricación de muebles de madera;Fabricación de muebles
+C;31002;Acabado de muebles de madera, excepto tapicería;Fabricación de muebles
+C;31003;Tapicería de muebles y vehículos automotores;Fabricación de muebles
+C;31004;Fabricación de muebles y accesorios de metal;Fabricación de muebles
+C;31005;Fabricación de muebles de plástico;Fabricación de muebles
+C;31006;Fabricación de colchones y somieres;Fabricación de muebles
+C;31009;Fabricación de muebles de otros materiales no especificados (excepto de piedra, hormigón y cerámica);Fabricación de muebles
+C;32110;Fabricación de joyas y artículos conexos;Otras industrias manufactureras
+C;32120;Fabricación de joyas de imitación y artículos conexos;Otras industrias manufactureras
+C;32200;Fabricación de instrumentos musicales;Otras industrias manufactureras
+C;32300;Fabricación de artículos de deporte;Otras industrias manufactureras
+C;32400;Fabricación de juegos y juguetes;Otras industrias manufactureras
+C;32500;Fabricación de instrumentos y suministros médicos y dentales;Otras industrias manufactureras
+C;32900;Otras industrias manufactureras n.c.p.;Otras industrias manufactureras
+C;32901;Fabricación de escobas, cepillos, plumeros y pinceles;Otras industrias manufactureras
+C;32902;Fabricación de ataúdes;Otras industrias manufactureras
+C;32909;Otras industrias manufactureras n.c.p.;Otras industrias manufactureras
+C;33110;Reparación de productos elaborados de metal;Otras industrias manufactureras
+C;33120;Reparación de maquinaria;Otras industrias manufactureras
+C;33130;Reparación de equipo electrónico y óptico;Otras industrias manufactureras
+C;33140;Reparación de equipo eléctrico;Otras industrias manufactureras
+C;33150;Reparación de equipo de transporte, excepto los vehículos automotores;Otras industrias manufactureras
+C;33190;Reparación de equipo de otro tipo;Otras industrias manufactureras
+C;33200;Instalación de maquinaria y equipo industrial;Otras industrias manufactureras
+D;35100;Producción, transmisión y distribución de energía eléctrica;Suministro de electricidad, gas, vapor y aire acondicionado
+D;35200;Fabricación del gas, distribución de combustibles gaseosos por tuberías;Suministro de electricidad, gas, vapor y aire acondicionado
+D;35300;Suministro de vapor y aire acondicionado;Suministro de electricidad, gas, vapor y aire acondicionado
+E;36000;Captación, tratamiento y suministro de agua;"Suministro de agua; alcantarillado, gestión de desechos y actividades de saneamiento"
+E;37000;Alcantarillado;"Suministro de agua; alcantarillado, gestión de desechos y actividades de saneamiento"
+E;38110;Recolección de desechos no peligrosos;"Suministro de agua; alcantarillado, gestión de desechos y actividades de saneamiento"
+E;38120;Recolección de desechos peligrosos;"Suministro de agua; alcantarillado, gestión de desechos y actividades de saneamiento"
+E;38210;Tratamiento y eliminación de desechos no peligrosos;"Suministro de agua; alcantarillado, gestión de desechos y actividades de saneamiento"
+E;38220;Tratamiento y eliminación de desechos peligrosos;"Suministro de agua; alcantarillado, gestión de desechos y actividades de saneamiento"
+E;38300;Recuperación de materiales;"Suministro de agua; alcantarillado, gestión de desechos y actividades de saneamiento"
+E;39000;Actividades de saneamiento y otros servicios de gestion de desechos;"Suministro de agua; alcantarillado, gestión de desechos y actividades de saneamiento"
+F;41000;Construcción de obras de arquitectura;Construcción
+F;42100;Construcción de infraestructura de transporte;Construcción
+F;42200;Construcción de infraestructura de servicios;Construcción
+F;42900;Construcción de otros proyectos de ingeniería civil;Construcción
+F;43110;Demoliciones;Construcción
+F;43120;Excavación y movimiento de suelo;Construcción
+F;43210;Instalación eléctrica y de comunicaciones;Construcción
+F;43220;Instalaciones sanitarias, de calefacción y de aire acondicionado;Construcción
+F;43221;Instalaciones sanitarias;Construcción
+F;43222;Instalación de calefacción y de aire acondicionado;Construcción
+F;43229;Otras instalaciones sanitarias, de calefacción y de aire acondicionado;Construcción
+F;43290;Otro tipo de instalaciones de construcción;Construcción
+F;43291;Colocación de aislamientos térmicos y acústicos;Construcción
+F;43299;Otras instalaciones de construcción n.c.p.;Construcción
+F;43300;Terminación de edificios;Construcción
+F;43301;Pintado y empapelado de edificios;Construcción
+F;43302;Colocación de revestimientos de pisos y paredes;Construcción
+F;43303;Colocación de tabiques de yeso y cielorrasos;Construcción
+F;43304;Instalación de objetos de carpintería de obra;Construcción
+F;43309;Otras tareas de terminación de edificios;Construcción
+F;43900;Otras actividades especializadas de construcción;Construcción
+F;43901;Actividades de impermiabilización de edificios;Construcción
+F;43902;Armado y desarmado de estructuras auxiliares (plataformas y andamios);Construcción
+F;43903;Construcción de pilotajes para la edificación;Construcción
+F;43909;Otras actividades especializadas de construcción;Construcción
+G;45100;Comercio al por mayor y al por menor de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45101;Importación de vehículos automotores: comercio al por mayor de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45102;Comercio al por mayor de vehículos nuevos;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45103;Comercio al por mayor de vehículos usados;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45104;Comisionistas de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45105;Subastas de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45109;Comercio al por menor de otros vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45200;Mantenimiento y reparación de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45201;Mantenimiento y reparación mecánica y eléctrica de vehículos;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45202;Talleres de gomería;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45203;Talleres de chapa y pintura;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45204;Lavaderos de autos;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45205;Talleres de alineación y balanceo;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45209;Otros tipos de reparaciones de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45300;Comercio al por mayor y al por menor de partes, piezas y accesorios de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45301;Comercio al por mayor de partes, piezas y accesorios de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45309;Comercio al por menor de partes, piezas y accesorios de vehículos automotores;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45400;Comercio al por mayor y al por menor, mantenimiento y reparación de motocicletas y de sus partes, piezas y accesorios;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45401;Comercio al por mayor y al por menor, mantenimiento de motocicletas, de sus partes, piezas y accesorios;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45402;Reparación y mantenimiento de motocicletas;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;45409;Agentes comisionistas y otros tipos de comercio de motocicletas n.c.p.;"Comercio al por mayor y al por menor; reparación de vehículos automotores y motocicletas"
+G;46100;Comercio al por mayor a cambio de una retribución o por contrata;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46101;Rematadores por cuenta propia;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46102;Consignatarios y comisionistas de ganado;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46103;Consignatarios y comisionistas de lana y cuero;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46104;Consignatarios y comisionistas de productos agrícolas;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46105;Remates ganaderos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46106;Casas de remates;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46109;Otros agentes al por mayor a cambio de retribución o por contrato;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46200;Comercio al por mayor de materias primas agropecuarias y animales vivos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46201;Comercio al por mayor de lanas, cuero y cerdas;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46202;Comercio al por mayor de granos, semillas y frutos oleaginosos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46203;Comercio al por mayor de flores y plantas;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46209;Comercio al por mayor de otras materias primas agropecuarias y animales vivos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46300;Comercio al por mayor de alimentos, bebidas y tabaco;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46301;Comercio al por mayor de comestibles, excepto carnes;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46302;Comercio al por mayor de productos vinícolas;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46303;Comercio al por mayor de bebidas importadas, excepto vinos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46304;Comercio al por mayor de bebidas nacionales, excepto vinos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46305;Comercio al por mayor de chacinados;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46306;Comercio al por mayor de menudencias, excepto chacinados, productos de la pesca y de aves y sus productos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46307;Comercio al por mayor de productos de la pesca;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46308;Comercio al por mayor de tabacos y cigarrillos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46309;Comercio al por mayor de otros alimentos y bebidas;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46310;Comercio al por mayor de aves y sus productos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46410;Comercio al por mayor de textiles, prendas de vestir y calzado.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46411;Comercio al por mayor de textiles;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46412;Comercio al por mayor de prendas de vestir;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46413;Comercio al por mayor de calzado;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46419;Comercio al por mayor de otro tipo de textiles, mercería y accesorios;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46490;Comercio al por mayor de otros artículos domésticos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46491;Comercio al por mayor de productos farmacéuticos, veterinarios, de tocador y cosméticos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46492;Comercio al por mayor de muebles y accesorios del hogar;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46493;Comercio al por mayor de productos de cristalería y menage;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46494;Comercio al por mayor de juguetes;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46495;Comercio al por mayor de electrodomésticos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46496;Comercio al por mayor de artículos de papelería, libros y periódicos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46499;Comercio al por mayor de instrumentos musicales y ópticos, bicicletas y otros artículos domésticos n.c.p.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46510;Comercio al por mayor de computadoras, equipo informático periférico y programas informáticos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46520;Comercio al por mayor de equipo electrónico de telecomunicaciones y de sus partes y piezas;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46530;Comercio al por mayor de maquinaria, equipo agrícola y sus suministros.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46590;Comercio al por mayor de otro tipo de maquinaria y equipo.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46610;Comercio al por mayor de combustibles sólidos, líquidos y gaseosos y de productos conexos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46620;Comercio al por mayor de metales y de minerales metalíferos.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46630;Comercio al por mayor de materiales de construcción, artículos de ferretería y equipo y materiales sanitarios y de calefacción;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46631;Comercio al por mayor de madera;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46632;Comercio al por mayor de materiales de construcción;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46633;Comercio al por mayor de pinturas, barnices, papel de empapelar y revestimiento de pisos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46634;Comercio al por mayor de vidrio.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46635;Comercio al por mayor de artículos sanitarios;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46639;Otro comercio al por mayor de artículos de ferretería y calefacción.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46690;Comercio al por mayor de basura, desechos y otros productos n.c.p.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46691;Comercio al por mayor de productos químicos industriales;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46692;Comercio al por mayor de fertilizantes y agroquímicos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46693;Comercio al por mayor de desechos y materiales para reciclar;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46699;Comercio al por mayor de otros productos n.c.p.;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;46900;Comercio al por mayor no especializado de otros productos;Comercio al por mayor, excepto de los vehículos de motor y de las motocicletas
+G;47110;Comercio al por menor en almacenes no especializados, con surtido compuestos principalmente de alimentos, bebidas y tabaco.;Comercio al por menor en almacenes no especializados
+G;47111;Comercio al por menor en hipermercados;Comercio al por menor en almacenes no especializados
+G;47112;Comercio al por menor en supermercados;Comercio al por menor en almacenes no especializados
+G;47113;Comercio al por menor en mini mercados;Comercio al por menor en almacenes no especializados
+G;47114;Comercio al por menor en almacenes minoristas sin despacho de bebidas;Comercio al por menor en almacenes no especializados
+G;47115;Comercio al por menor realizado por los free shops;Comercio al por menor en almacenes no especializados
+G;47116;Comercio al por menor realizado por las cooperativas de consumo;Comercio al por menor en almacenes no especializados
+G;47119;Comercio al por menor en almacenes con despacho de bebidas;Comercio al por menor en almacenes no especializados
+G;47190;Comercio al por menor de otros productos en almacenes no especializados.;Comercio al por menor en almacenes no especializados
+G;47191;Comercio al por menor de diarios, revistas, tabacos, golosinas, etc. en almacenes no especializados: Kioscos.;Comercio al por menor en almacenes no especializados
+G;47199;Comercio al por menor de otros productos en almacenes no especializados n.c.p.;Comercio al por menor en almacenes no especializados
+G;47210;Comercio al por menor de alimento en almacenes especializados;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47211;Comercio al por menor de frutas y verduras;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47212;Comercio al por menor de carne y menudencias;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47213;Comercio al por menor de aves y huevos;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47214;Comercio al por menor de productos de panadería y confitería;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47215;Comercio al por menor de pescados y mariscos;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47216;Comercio al por menor de fiambres y productos de granja;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47219;Comercio al por menor de otros alimentos en almacenes especializados.;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47220;Comercio al por menor de bebidas en almacenes especializados;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47230;Comercio al por menor de tabaco en almacenes especializados;Comercio al por menor de alimento, bebidas y tabaco en almacenes especializados
+G;47300;Comercio al por menor de combustibles para vehículos en almacenes especializados;Comercio al por menor de combustibles para vehículos en almacenes especializados
+G;47410;Comercio al por menor de computadoras, unidades periféricas, equipo de software y telecomunicaciones;Comercio al por menor de equipos de ICT (información, comunicación y telecomunicaciones en almacenes especializados.
+G;47420;Comercio al por menor de equipo de audio y video en almacenes especializados;Comercio al por menor de equipos de ICT (información, comunicación y telecomunicaciones en almacenes especializados.
+G;47510;Comercio al por menor de textiles en almacenes especializados.;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47520;Comercio al por menor de artículos de ferretería, pinturas y productos de vidrio en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47521;Comercio al por menor de artículos de ferretería;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47522;Comercio al por menos de pinturas y revestimientos similares;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47523;Comercio al por menor de otros materiales de construcción tales como ladrillos, madera, equipo sanitario.;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47524;Comercio al por menor de vidrio plano - vidrierías;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47525;Comercio al por menor de materiales eléctricos y de conducción eléctrica;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47529;Comercio al por menor de otros artículos n.c.p. (equipos y materiales del tipo “Hágalo usted mismo”, cortadoras de césped, saunas, etc.);Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47530;Comercio al por menor de alfombras, cubiertas de pared y piso en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47590;Comercio al por menor de aparatos, muebles, artículos y equipos de uso domésticos en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47591;Comercio al por menor de electrodomésticos y accesorios;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47592;Comercio al por menor de muebles y accesorios para el hogar;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47593;Comercio al por menor de cristalería y menage;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47594;Comercio al por menor de instrumentos musicales y partituras;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47595;Comercio al por menor de sistemas de seguridad;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47599;Comercio al por menor de otros aparatos, muebles, artículos y equipos de uso doméstico en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47610;Comercio al por menor de libros, periódicos y artículos de papelería en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47611;Comercio al por menor de libros;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47619;Comercio al por menor de artículos de papelería, periódicos y otros artículos de oficina;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47620;Comercio al por menor de grabaciones musicales y videográficas en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47630;Comercio al por menor de artículos de deporte en almacenes especializados.;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47631;Comercio al por menor de bicicletas;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47639;Comercio al por menor de otros artículos de deporte en almacenes especializados, excepto bicicletas;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47640;Comercio al por menor de juegos y de juguetes en almacenes especializados.;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47710;Comercio al por menor de productos textiles, prendas de vestir, calzado y artículos de cuero en almacenes especializados.;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47711;Comercio al por menor de prendas de vestir de niños y de bebés;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47712;Comercio al por menor de prendas de vestir de hombres;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47713;Comercio al por menor de prendas de vestir de dama;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47714;Comercio al por menor de prendas de vestir de cueros y pieles;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47715;Comercio al por menor de prendas de vestir interiores, lencería;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47716;Comercio al por menor de prendas de vestir en tiendas no especializadas;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47717;Comercio al por menor de calzado;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47718;Comercio al por menor de accesorios de cuero y sucedáneos, excepto calzado y prendas de vestir;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47719;Comercio al por menor de otros productos textiles n.c.p.: prendas de vestir, calzado y artículos de cuero en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47720;Comercio al por menor de productos farmacéuticos y medicinales, cosméticos y artículos de tocador en almacenes especializados.;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47721;Comercio al por menor de productos farmacéuticos, de droguería y homeopatía;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47722;Comercio al por menor de productos de tocador, perfumería y cosmética;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47723;Comercio al por menor de productos veterinarios;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47729;Comercio al por menor de productos médicos, ortopédicos y otros n.c.p.;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47730;Otro comercio al por menor de productos nuevos en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47731;Comercio al por menor de flores y plantas, semillas, fertilizantes y artículos de jardín;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47732;Comercio al por menor de combustibles de uso doméstico y gas envasado;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47733;Comercio al por menor de carbón y leña;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47734;Comercio al por menor de relojes y joyas;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47735;Comercio al por menor de equipo fotográfico, óptico y de precisión;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47736;Comercio al por menor de artesanías, fantasías y souvenirs;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47737;Comercio al por menor de objetos de galerías de arte comerciales;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47739;Otro comercio al por menor de productos nuevos n.c.p. en almacenes especializados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47740;Comercio al por menor de mercancías de segunda mano;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47741;Comercio al por menor de artículos de construcción usados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47742;Comercio al por menor de prendas de vestir usada;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47749;Comercio al por menor de otras mercancías de segunda mano;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47810;Comercio al por menor en puestos de venta y mercados de: alimento, bebidas y de productos del tabaco;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47820;Comercio al por menor en puestos de venta y mercados de: artículos textiles, ropa y calzado;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47890;Comercio al por menor en puestos de venta y mercados de otras mercancías;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47910;Comercio al por menor a través de pedido por correo o vía Internet;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47990;Otros tipos de comercio al por menor no realizada en almacenes, puestos de venta o mercados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47991;Comercio ambulante al por menor de comestibles;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+G;47999;Comercio al por menor de artículos n.c.p. no realizada en almacenes, puestos de venta o mercados;Comercio al por menor de otro equipamiento para la casa, en almacenes especializados.
+H;49110;Transporte de pasajeros por vía férrea;Transporte y almacenamiento
+H;49120;Transporte de carga por vía férrea;Transporte y almacenamiento
+H;49210;Transporte terrestre de pasajeros del área urbana, suburbana o metropolitana;Transporte y almacenamiento
+H;49220;Otros transportes terrestres de pasajeros;Transporte y almacenamiento
+H;49221;Transporte terrestre de pasajeros en taxímetros;Transporte y almacenamiento
+H;49222;Transporte terrestre de pasajeros en remises;Transporte y almacenamiento
+H;49223;Transporte de escolares;Transporte y almacenamiento
+H;49224;Transporte terrestre de pasajeros en buses de larga distancia regulares;Transporte y almacenamiento
+H;49229;Otros tipos de transportes terrestres de pasajeros;Transporte y almacenamiento
+H;49230;Transporte de carga por carretera;Transporte y almacenamiento
+H;49231;Transporte terrestre local de carga (fletes, mudanzas, etc. de corta distancia);Transporte y almacenamiento
+H;49232;Transporte terrestre de carga interdepartamental e internacional;Transporte y almacenamiento
+H;49239;Otros tipos de transporte terrestre por carreteras n.c.p.;Transporte y almacenamiento
+H;49300;Transporte por tuberías;Transporte y almacenamiento
+H;50110;Transporte marítimo y de cabotaje de pasajero;Transporte y almacenamiento
+H;50120;Transporte marítimo y de cabotaje de carga;Transporte y almacenamiento
+H;50210;Transporte de pasajeros por vías de navegación interiores;Transporte y almacenamiento
+H;50220;Transporte de carga, por vías de navegación interiores;Transporte y almacenamiento
+H;51100;Transporte de pasajeros por vía aérea;Transporte y almacenamiento
+H;51200;Transporte de carga por vía aérea;Transporte y almacenamiento
+H;52210;Actividades de servicio secundario de transporte por vía terrestre;Transporte y almacenamiento
+H;52211;Servicios de estacionamiento y garages;Transporte y almacenamiento
+H;52219;Otros servicios secundarios del transporte terrestre;Transporte y almacenamiento
+H;52220;Actividades de servicio secundario de transporte por vía acuática;Transporte y almacenamiento
+H;52230;Actividades de servicio secundario de transporte por vía aérea;Transporte y almacenamiento
+H;52240;Manipulación de carga;Transporte y almacenamiento
+H;52290;Otras actividades complementarias de transporte;Transporte y almacenamiento
+H;52291;Agentes de transporte marítimo;Transporte y almacenamiento
+H;52292;Agentes de transporte aéreo;Transporte y almacenamiento
+H;52293;Agentes de transporte férreo y carretero;Transporte y almacenamiento
+H;52294;Despachantes de Aduana;Transporte y almacenamiento
+H;52295;Proveedores marítimos;Transporte y almacenamiento
+H;52299;Manipulación de productos y otras actividades complementarias al transporte;Transporte y almacenamiento
+H;53100;Correo;Transporte y almacenamiento
+H;53200;Servicio de mensajería;Transporte y almacenamiento
+I;55100;Actividades de alojamiento de corto plazo;Alojamiento y servicios de comida
+I;55110;Actividades de alojamiento en hoteles;Alojamiento y servicios de comida
+I;55120;Actividades de alojamiento transitorio: hoteles de alta rotatividad;Alojamiento y servicios de comida
+I;55130;Actividades de alojamiento en albergues;Alojamiento y servicios de comida
+I;55190;Otros alojamientos de corto plazo;Alojamiento y servicios de comida
+I;55191;Actividades de alojamiento en pensiones de corto plazo;Alojamiento y servicios de comida
+I;55192;Actividades de alojamiento en estancias turísticas;Alojamiento y servicios de comida
+I;55199;Otros alojamientos de corto plazo n.c.p.;Alojamiento y servicios de comida
+I;55200;Parque de caravanas, parques de remolques, campamentos de recreo y camping;Alojamiento y servicios de comida
+I;55900;Otras actividades de alojamiento;Alojamiento y servicios de comida
+I;55901;Actividades de alojamiento en pensiones familiares sin servicios;Alojamiento y servicios de comida
+I;55909;Otras actividades de alojamientos, excepto pensiones familiares;Alojamiento y servicios de comida
+I;56100;Restaurantes y otros servicios de comidas móviles;Alojamiento y servicios de comida
+I;56101;Restaurantes y parrilladas;Alojamiento y servicios de comida
+I;56102;Rotiserías;Alojamiento y servicios de comida
+I;56103;Heladerías que no elaboran el producto;Alojamiento y servicios de comida
+I;56104;Salones de te;Alojamiento y servicios de comida
+I;56109;Otros servicios de comida n.c.p. (carros móviles de suministro de comidas, etc.);Alojamiento y servicios de comida
+I;56210;Abastecimiento de eventos;Alojamiento y servicios de comida
+I;56290;Otras actividades del servicio de alimentación;Alojamiento y servicios de comida
+I;56300;Actividades vinculadas al servicio de bebidas;Alojamiento y servicios de comida
+I;56301;Bares de expendio de bebidas;Alojamiento y servicios de comida
+I;56302;Clubes nocturnos y similares con predominante suministro de bebidas;Alojamiento y servicios de comida
+I;56309;Otras actividades vinculadas al servicio de bebidas;Alojamiento y servicios de comida
+J;58110;Publicación de libros;Informática y comunicación
+J;58120;Publicación de directorios y de listas de envío;Informática y comunicación
+J;58130;Publicación de periódicos, diarios y revistas;Informática y comunicación
+J;58190;Otras publicaciones;Informática y comunicación
+J;58200;Publicación de programas informáticos;Informática y comunicación
+J;59110;Actividades de producción de películas, videocintas y programas de televisión;Informática y comunicación
+J;59120;Actividades posteriores de la producción de películas, videocintas y programas de televisión;Informática y comunicación
+J;59130;Actividades de distribución de películas, videocintas y programas de televisión;Informática y comunicación
+J;59140;Actividades de proyección de películas.;Informática y comunicación
+J;59200;Actividades de grabación y publicación de grabaciones sonoras;Informática y comunicación
+J;60100;Difusión de radio.;Informática y comunicación
+J;60200;Programación y actividades de transmisión de televisión.;Informática y comunicación
+J;61000;Telecomunicaciones.;Informática y comunicación
+J;62010;Actividades de programación informática;Informática y comunicación
+J;62020;Actividades de consultoría informática y actividades de administración de medios informáticos;Informática y comunicación
+J;62090;Otras actividades de tecnología de información y servicio de computadoras;Informática y comunicación
+J;63110;Procesamiento de datos, hospedaje y actividades conexas;Informática y comunicación
+J;63120;Portales Web;Informática y comunicación
+J;63910;Actividades de agencias de noticias;Informática y comunicación
+J;63990;Otros servicios de información n.c.p.;Informática y comunicación
+K;64110;Banca Central;Actividades financieras y de seguros.
+K;64190;Otros tipos de intermediación monetaria.;Actividades financieras y de seguros.
+K;64191;Intermediación monetaria realizada por los bancos comerciales;Actividades financieras y de seguros.
+K;64192;Bancos especializados en actividades hipotecarias;Actividades financieras y de seguros.
+K;64193;Intermediación monetaria realizada por cooperativas y asociaciones de ahorro y crédito;Actividades financieras y de seguros.
+K;64199;Otro tipo de intermediación monetaria n.c.p.;Actividades financieras y de seguros.
+K;64200;Actividades de sociedades de control (holding);Actividades financieras y de seguros.
+K;64300;Fideicomisos, fondos y otras fuentes de financiamiento;Actividades financieras y de seguros.
+K;64301;Corporación para el desarrollo;Actividades financieras y de seguros.
+K;64302;Sociedades financieras de inversión (SAFI);Actividades financieras y de seguros.
+K;64309;Fideicomisos, fondos y otras fuentes de financiamiento n.c.p.;Actividades financieras y de seguros.
+K;64910;Arrendamiento financiero;Actividades financieras y de seguros.
+K;64920;Otros tipos de crédito;Actividades financieras y de seguros.
+K;64921;Otorgamiento de tarjetas de crédito sin aval bancario;Actividades financieras y de seguros.
+K;64922;Actividad de las casas de empeño;Actividades financieras y de seguros.
+K;64923;Actividad de los prestamistas;Actividades financieras y de seguros.
+K;64924;Actividad de los círculos de ahorro;Actividades financieras y de seguros.
+K;64929;Otros tipos de financiamiento n.c.p.;Actividades financieras y de seguros.
+K;64990;Otras actividades financieras, excepto seguros y de fondos de pensiones.;Actividades financieras y de seguros.
+K;65110;Seguros de vida;Actividades financieras y de seguros.
+K;65120;Seguros generales;Actividades financieras y de seguros.
+K;65200;Reaseguros;Actividades financieras y de seguros.
+K;65300;Fondos de pensión;Actividades financieras y de seguros.
+K;66110;Administración de mercados financieros;Actividades financieras y de seguros.
+K;66120;Títulos de valor y contratos de corretaje de materias primas;Actividades financieras y de seguros.
+K;66121;Actividad de las casas de cambio;Actividades financieras y de seguros.
+K;66122;Actividad de los corredores de cambio y de valores;Actividades financieras y de seguros.
+K;66129;Otras actividades relacionadas a los títulos de valor y contratos de corretaje de materias primas;Actividades financieras y de seguros.
+K;66190;Otras actividades auxiliares a las actividades de servicios financieros;Actividades financieras y de seguros.
+K;66210;Evaluación de riesgos y daños;Actividades financieras y de seguros.
+K;66220;Actividades de los agentes y corredores de seguro;Actividades financieras y de seguros.
+K;66290;Otras actividades auxiliares de seguros y fondos de pensiones;Actividades financieras y de seguros.
+K;66300;Actividades de administración de fondos;Actividades financieras y de seguros.
+K;66301;AFAPs;Actividades financieras y de seguros.
+K;66309;Otras actividades de administración de fondos;Actividades financieras y de seguros.
+L;68100;Actividades inmobiliarias con bienes propios o arrendados;Actividades inmobiliarias
+L;68101;Propiedad y explotación de bienes inmobiliarios propios no rurales;Actividades inmobiliarias
+L;68109;Otras actividades con bienes propios o arrendados;Actividades inmobiliarias
+L;68200;Actividades inmobiliarias realizadas a cambio de una retribución o por contrato.;Actividades inmobiliarias
+L;68201;Intermediación en la compra, venta y arrendamiento de inmuebles;Actividades inmobiliarias
+L;68202;Avalúos de inmuebles;Actividades inmobiliarias
+L;68203;Arrendamiento de inmuebles rurales;Actividades inmobiliarias
+L;68209;Otras actividades inmobiliarias realizadas a cambio de una retribución o por contrato;Actividades inmobiliarias
+M;69100;Actividades jurídicas;Actividades profesionales, científicas y técnicas
+M;69101;Servicios jurídicos y notariales prestados por profesionales independientes;Actividades profesionales, científicas y técnicas
+M;69109;Otros servicios jurídicos y notariales;Actividades profesionales, científicas y técnicas
+M;69200;"Actividades de contabilidad, teneduría de libros y auditorias; asesoramiento en materia de impuesto.";Actividades profesionales, científicas y técnicas
+M;69201;Servicios contables prestados por profesionales independientes;Actividades profesionales, científicas y técnicas
+M;69209;Otros servicios contables;Actividades profesionales, científicas y técnicas
+M;70100;Actividades de oficinas centrales;Actividades profesionales, científicas y técnicas
+M;70200;Actividades de administración de empresas y de consultoría sobre administración de empresas.;Actividades profesionales, científicas y técnicas
+M;70201;Servicios de contabilidad, administración y asesoramiento de empresas, excepto los prestados por profesionales;Actividades profesionales, científicas y técnicas
+M;70202;Actividad de las gestorías;Actividades profesionales, científicas y técnicas
+M;70209;Otras actividades de administración y consultoría de administración de empresas;Actividades profesionales, científicas y técnicas
+M;71100;"Actividades de arquitectura e ingeniería; y actividades conexas de asesoramiento técnico.";Actividades profesionales, científicas y técnicas
+M;71101;Servicios de arquitectura;Actividades profesionales, científicas y técnicas
+M;71102;Actividades de diseño de paisajes;Actividades profesionales, científicas y técnicas
+M;71103;Servicios de ingeniería;Actividades profesionales, científicas y técnicas
+M;71109;Otras actividades técnicas y conexas;Actividades profesionales, científicas y técnicas
+M;71200;Ensayos y análisis técnicos;Actividades profesionales, científicas y técnicas
+M;72100;Investigación y desarrollo experimental en el campo de las ciencias naturales y la ingeniería;Actividades profesionales, científicas y técnicas
+M;72200;Investigación y desarrollo experimental en el campo de las ciencias sociales y las humanidades.;Actividades profesionales, científicas y técnicas
+M;73100;Publicidad;Actividades profesionales, científicas y técnicas
+M;73200;Investigación de mercados y encuestas de opinión públicas;Actividades profesionales, científicas y técnicas
+M;74100;Actividades especializadas en diseño;Actividades profesionales, científicas y técnicas
+M;74101;Servicios de diseño gráfico;Actividades profesionales, científicas y técnicas
+M;74102;Actividad de diseño de modas;Actividades profesionales, científicas y técnicas
+M;74103;Servicios de decoración y diseño de interiores;Actividades profesionales, científicas y técnicas
+M;74109;Otras actividades especializadas en diseño;Actividades profesionales, científicas y técnicas
+M;74200;Actividades de fotografía;Actividades profesionales, científicas y técnicas
+M;74900;Otras actividades profesionales, científicas y técnicas n.c.p.;Actividades profesionales, científicas y técnicas
+M;74901;Servicios de traducción;Actividades profesionales, científicas y técnicas
+M;74902;Servicios de consultoría en agronomía;Actividades profesionales, científicas y técnicas
+M;74903;Servicios de meteorología;Actividades profesionales, científicas y técnicas
+M;74904;Registros de marcas y patentes;Actividades profesionales, científicas y técnicas
+M;74905;Avaluadores, fiscalizadores y revisores del BPS;Actividades profesionales, científicas y técnicas
+M;74909;Otras actividades profesionales, científicas y técnicas no incluidas en las clases anteriores;Actividades profesionales, científicas y técnicas
+M;75000;Actividades veterinarias;Actividades profesionales, científicas y técnicas
+N;77100;Renta y alquiler de vehículos automotores;Actividades administrativas y servicios de apoyo
+N;77210;Renta y alquiler de equipo de recreo y deportivo;Actividades administrativas y servicios de apoyo
+N;77220;Alquiler de cintas de vídeo y discos;Actividades administrativas y servicios de apoyo
+N;77290;Alquiler de otros efectos personales y artículos domésticos n.c.p.;Actividades administrativas y servicios de apoyo
+N;77300;Alquiler de otro tipo de maquinaria, equipo y mercancías tangibles;Actividades administrativas y servicios de apoyo
+N;77301;Alquiler de maquinaria manufacturera sin operario;Actividades administrativas y servicios de apoyo
+N;77302;Alquiler de equipo agrícola sin operario;Actividades administrativas y servicios de apoyo
+N;77303;Alquiler de equipo de construcción sin operario;Actividades administrativas y servicios de apoyo
+N;77304;Alquiler de equipo contable, de computación y de oficina sin operario;Actividades administrativas y servicios de apoyo
+N;77309;Alquiler de otro tipo de maquinaria, equipo y mercancías tangibles n.c.p.;Actividades administrativas y servicios de apoyo
+N;77400;Arrendamiento de propiedad intelectual y productos similares excepto derechos de autor.;Actividades administrativas y servicios de apoyo
+N;78100;Actividades de agencias de colocación de empleados;Actividades administrativas y servicios de apoyo
+N;78200;Actividades de agencias de trabajo temporal;Actividades administrativas y servicios de apoyo
+N;78300;Otro suministro de recursos humanos;Actividades administrativas y servicios de apoyo
+N;79110;Actividades de agencias de viajes;Actividades administrativas y servicios de apoyo
+N;79120;Actividades de operadores turísticos;Actividades administrativas y servicios de apoyo
+N;79900;Otros servicios de reserva y actividades relacionadas;Actividades administrativas y servicios de apoyo
+N;80100;Actividades de seguridad privada;Actividades administrativas y servicios de apoyo
+N;80101;Servicios de transportes de caudales;Actividades administrativas y servicios de apoyo
+N;80102;Servicios de guardias de seguridad sin monitoreo electrónico;Actividades administrativas y servicios de apoyo
+N;80109;Otras actividades de seguridad e investigación n.c.p.;Actividades administrativas y servicios de apoyo
+N;80200;Actividades de servicios de sistemas de seguridad;Actividades administrativas y servicios de apoyo
+N;80201;Talleres de cerrajería;Actividades administrativas y servicios de apoyo
+N;80209;Otras actividades de servicios de sistemas de seguridad;Actividades administrativas y servicios de apoyo
+N;80300;Actividades de servicios de sistemas de seguridad;Actividades administrativas y servicios de apoyo
+N;81100;Actividades combinadas de apoyo a instalaciones;Actividades administrativas y servicios de apoyo
+N;81210;Limpieza general de edificios;Actividades administrativas y servicios de apoyo
+N;81290;Otras actividades de limpieza industrial y de edificios.;Actividades administrativas y servicios de apoyo
+N;81291;Servicios de limpieza de chimeneas y estufas;Actividades administrativas y servicios de apoyo
+N;81292;Servicio de barrido de calles y remoción de hielo y nieve;Actividades administrativas y servicios de apoyo
+N;81299;Otras actividades de limpieza industrial y de edificios n.c.p.;Actividades administrativas y servicios de apoyo
+N;81300;Actividades de servicio de manutencion y cuidado de paisajes;Actividades administrativas y servicios de apoyo
+N;81301;Servicios de jardinería;Actividades administrativas y servicios de apoyo
+N;81302;Servicios de limpieza de piscinas;Actividades administrativas y servicios de apoyo
+N;81309;Otras actividades de servicio de manutencion y cuidado de paisajesn.c.p.;Actividades administrativas y servicios de apoyo
+N;82110;Actividades de servicio administrativa combinadas de oficina;Actividades administrativas y servicios de apoyo
+N;82190;Fotocopiado, preparación de documentos y otro apoyo especializado de oficinas.;Actividades administrativas y servicios de apoyo
+N;82200;Actividades de centros de llamados;Actividades administrativas y servicios de apoyo
+N;82300;Organización de convenciones y eventos comerciales;Actividades administrativas y servicios de apoyo
+N;82910;Actividades de agencias de cobranza y oficinas de crédito;Actividades administrativas y servicios de apoyo
+N;82920;Actividades de embalaje;Actividades administrativas y servicios de apoyo
+N;82990;Otras actividades de servicio de apoyo a los negocios, n.c.p.;Actividades administrativas y servicios de apoyo
+O;84110;Actividades de la administración pública en general;"Administración pública y defensa; planes de seguridad social de afiliación obligatoria"
+O;84120;Regulación de las actividades de organismos que prestan servicios sanitarios, educativos, culturales y otros servicios sociales, excepto servicios de seguridad social.;"Administración pública y defensa; planes de seguridad social de afiliación obligatoria"
+O;84130;Regulación y facilitación de la actividad económica;"Administración pública y defensa; planes de seguridad social de afiliación obligatoria"
+O;84210;Relaciones exteriores;"Administración pública y defensa; planes de seguridad social de afiliación obligatoria"
+O;84220;Actividades de defensa;"Administración pública y defensa; planes de seguridad social de afiliación obligatoria"
+O;84230;Actividades de mantenimiento del orden público y de seguridad;"Administración pública y defensa; planes de seguridad social de afiliación obligatoria"
+O;84300;Actividades de planes de seguridad social de afiliación obligatoria;"Administración pública y defensa; planes de seguridad social de afiliación obligatoria"
+P;85100;Enseñanza pre primaria y primaria;Enseñanza
+P;85210;Enseñanza secundaria de formación general;Enseñanza
+P;85220;Enseñanza secundaria de formación técnica y profesional;Enseñanza
+P;85300;Enseñanza superior;Enseñanza
+P;85410;Educación deportiva y recreativa;Enseñanza
+P;85420;Educación cultural;Enseñanza
+P;85490;Otros tipos de enseñanza;Enseñanza
+P;85491;Institutos de enseñanza de idiomas;Enseñanza
+P;85492;Academias de conductores;Enseñanza
+P;85499;Otros tipos de enseñanza n.c.p.;Enseñanza
+P;85500;Servicios de apoyo educativo;Enseñanza
+Q;86100;Actividades de hospitales;Servicios sociales y relacionados con la Salud Humana.
+Q;86200;Actividades de médicos y odontólogos;Servicios sociales y relacionados con la Salud Humana.
+Q;86201;Clínicas médicas, excepto de estética corporal;Servicios sociales y relacionados con la Salud Humana.
+Q;86202;Servicios odontológicos;Servicios sociales y relacionados con la Salud Humana.
+Q;86203;Clínicas médicas de estética corporal;Servicios sociales y relacionados con la Salud Humana.
+Q;86209;Otras actividades médicas;Servicios sociales y relacionados con la Salud Humana.
+Q;86900;Otras actividades relacionadas con la salud humana;Servicios sociales y relacionados con la Salud Humana.
+Q;86901;Servicios de acompañantes de enfermos;Servicios sociales y relacionados con la Salud Humana.
+Q;86902;Servicios de laboratorios de análisis clínicos y radiológicos;Servicios sociales y relacionados con la Salud Humana.
+Q;86903;Servicios de ambulancias;Servicios sociales y relacionados con la Salud Humana.
+Q;86909;Otras actividades relacionadas a la salud humana n.c.p.;Servicios sociales y relacionados con la Salud Humana.
+Q;87100;Instalaciones de residencias con cuidado de enfermeros;Servicios sociales y relacionados con la Salud Humana.
+Q;87200;Instituciones dedicadas al tratamiento del retraso mental, los problemas de salud mental y el uso indebido de sustancias nocivas.;Servicios sociales y relacionados con la Salud Humana.
+Q;87300;Instituciones dedicadas al cuidado del adulto mayor y discapacitados;Servicios sociales y relacionados con la Salud Humana.
+Q;87900;Otras instituciones residenciales de cuidado;Servicios sociales y relacionados con la Salud Humana.
+Q;88100;Servicios sociales sin alojamiento para el adulto mayor y discapacitados;Servicios sociales y relacionados con la Salud Humana.
+Q;88900;Otras actividades de trabajo social sin alojamiento, n.c.p.;Servicios sociales y relacionados con la Salud Humana.
+R;90000;Actividades de arte, entretenimiento y creatividad;Artes, entretenimiento y recreación
+R;91010;Actividades de Bibliotecas y archivos;Artes, entretenimiento y recreación
+R;91020;Actividades de Museos y preservación de lugares históricos;Artes, entretenimiento y recreación
+R;91030;Actividades de jardines botánicos, zoológicos y parques naturales.;Artes, entretenimiento y recreación
+R;92000;Actividades de juego y apuestas;Artes, entretenimiento y recreación
+R;92001;Actividades de los casinos;Artes, entretenimiento y recreación
+R;92002;Actividades de la banca de loterías y quinielas;Artes, entretenimiento y recreación
+R;92003;Actividades de las agencias y sub agencias de quinielas;Artes, entretenimiento y recreación
+R;92009;Otras actividades de juegos y apuestas n.c.p.;Artes, entretenimiento y recreación
+R;93110;Administración de instalaciones deportivas;Artes, entretenimiento y recreación
+R;93111;Administración de instalaciones deportivas para turf;Artes, entretenimiento y recreación
+R;93119;Administración de otro tipo de instalaciones deportivas;Artes, entretenimiento y recreación
+R;93120;Actividades de clubes deportivos;Artes, entretenimiento y recreación
+R;93190;Otras actividades deportivas;Artes, entretenimiento y recreación
+R;93191;Turf;Artes, entretenimiento y recreación
+R;93192;Actividades de los Caddies;Artes, entretenimiento y recreación
+R;93199;Otras actividades deportivas n.c.p.;Artes, entretenimiento y recreación
+R;93210;Actividades de parques de atracciones y parques temáticos;Artes, entretenimiento y recreación
+R;93290;Otras actividades de diversión y esparcimiento;Artes, entretenimiento y recreación
+R;93291;Salas de baile y clubes nocturnos sin suministro de bebidas;Artes, entretenimiento y recreación
+R;93292;Juegos electrónicos, videojuegos y similares, sin apuestas;Artes, entretenimiento y recreación
+R;93299;Otras actividades de diversión y esparcimiento n.c.p.;Artes, entretenimiento y recreación
+S;94110;Actividades de organizaciones empresariales y de empleadores;Otras actividades de servicio
+S;94120;Actividades de organizaciones profesionales;Otras actividades de servicio
+S;94200;Actividades de sindicatos;Otras actividades de servicio
+S;94910;Actividades de organizaciones religiosas;Otras actividades de servicio
+S;94920;Actividades de organizaciones políticas;Otras actividades de servicio
+S;94990;Actividades de otras asociaciones;Otras actividades de servicio
+S;94991;Actividades de las comisiones de fomento escolares y liceales;Otras actividades de servicio
+S;94999;Actividades de las sociedades literarias, cívicas y sociales;Otras actividades de servicio
+S;95110;Reparación de computadoras y equipo periférico;Otras actividades de servicio
+S;95120;Reparación de equipos comunicacionales;Otras actividades de servicio
+S;95210;Reparación de aparatos de consumo eléctrico;Otras actividades de servicio
+S;95220;Reparación de aparatos domésticos y equipamiento de hogar y jardín;Otras actividades de servicio
+S;95230;Reparación de calzado y artículos de cuero;Otras actividades de servicio
+S;95240;Reparación de muebles y accesorios para el hogar;Otras actividades de servicio
+S;95290;Reparación de otros bienes personales y domésticos;Otras actividades de servicio
+S;95291;Reparación de bicicletas y similares;Otras actividades de servicio
+S;95292;Reparación de relojes, joyas y cronómetros;Otras actividades de servicio
+S;95293;Reparación de instrumentos musicales, afinación de pianos;Otras actividades de servicio
+S;95294;Reparación y modificación de ropa (costuras y zurcidos);Otras actividades de servicio
+S;95299;Reparación de otros bienes personales y domésticos n.c.p.;Otras actividades de servicio
+S;96010;Lavado y secado, limpieza de prendas de tela y de piel;Otras actividades de servicio
+S;96011;Servicios de lavaderos de ropa;Otras actividades de servicio
+S;96012;Servicios de tintorerías y limpieza en seco;Otras actividades de servicio
+S;96019;Otros servicios de limpieza de prendas n.c.p.;Otras actividades de servicio
+S;96020;Actividades de peluquería y otros tratamientos de belleza;Otras actividades de servicio
+S;96021;Servicios de peluquerías y de salones de belleza;Otras actividades de servicio
+S;96029;Otros servicios de tratamientos de belleza n.c.p.;Otras actividades de servicio
+S;96030;Funerales y actividades conexas;Otras actividades de servicio
+S;96031;Servicio fúnebre;Otras actividades de servicio
+S;96032;Cementerios para mascotas y actividades conexas;Otras actividades de servicio
+S;96039;Cementerios para humanos y otras actividades conexas n.c.p.;Otras actividades de servicio
+S;96090;Otras actividades de servicios;Otras actividades de servicio
+S;96091;Servicios de baños de vapor y de sol (solarios);Otras actividades de servicio
+S;96092;Servicios de agencias matrimoniales y similares;Otras actividades de servicio
+S;96093;Actividades de quiromancia, astrología, espiritismo, tarot, etc.;Otras actividades de servicio
+S;96094;Servicios de masajes reductores y de adelgazamiento;Otras actividades de servicio
+S;96095;Actividades de prostíbulos y similares;Otras actividades de servicio
+S;96099;Otras actividades de servicios n.c.p.;Otras actividades de servicio
+T;97000;Actividades de los hogares en calidad de empleadores de personal doméstico.;Actividades de los hogares en calidad de empleadores, actividades indiferenciadas de producción de bienes y servicios de los hogares para uso propio.
+T;97001;Empleadores de servicio doméstico;Actividades de los hogares en calidad de empleadores, actividades indiferenciadas de producción de bienes y servicios de los hogares para uso propio.
+T;97002;Usuarios de servicios complementarios;Actividades de los hogares en calidad de empleadores, actividades indiferenciadas de producción de bienes y servicios de los hogares para uso propio.
+T;97003;Empleadores de cuidadores de enfermos;Actividades de los hogares en calidad de empleadores, actividades indiferenciadas de producción de bienes y servicios de los hogares para uso propio.
+T;97009;Empleadores de otros tipos de personal;Actividades de los hogares en calidad de empleadores, actividades indiferenciadas de producción de bienes y servicios de los hogares para uso propio.
+T;98100;Actividades indiferenciadas de producción de bienes de los hogares privados para uso propio.;Actividades de los hogares en calidad de empleadores, actividades indiferenciadas de producción de bienes y servicios de los hogares para uso propio.
+T;98200;Actividades indiferenciadas de producción de servicios de los hogares privados para uso propio;Actividades de los hogares en calidad de empleadores, actividades indiferenciadas de producción de bienes y servicios de los hogares para uso propio.
+U;99000;Actividades de organizaciones y órganos extraterritoriales.;Actividades de organizaciones y órganos extraterritoriales.
+V;01900;Predios rurales;Predios rurales
+V;01901;Predio rural sin explotación;Predios rurales
+V;01902;Predio rural explotado por terceros;Predios rurales
+V;01903;Predio rural con producción para autoconsumo;Predios rurales
+V;01904;Predio rural con explotación de industria, comercio y/o actividades recreativas;Predios rurales
+V;01905;"Personas físicas, núcleos familiares y sucesiones indivisas; sujetos pasivos del impuesto al patrimonio";"Personas físicas, núcleos familiares y sucesiones indivisas; sujetos pasivos del impuesto al patrimonio"
+V;01906;Usuario de Zona Franca;Usuario de Zona Franca
+V;01907;Actividades no bien especificadas;Actividades no bien especificadas
+V;01908;CIIU conversión;CIIU conversión

@@ -1,0 +1,166 @@
+codigo;nombre;decimales
+AED;Dírham de los Emiratos Árabes Unidos;2
+AFN;Afgani afgano;2
+ALL;Lek albanés;2
+AMD;Dram armenio;2
+AOA;Kwanza angoleño;2
+ARS;Peso argentino;2
+AUD;Dólar australiano;2
+AWG;Florín arubeño;2
+AZN;Manat azerbaiyano;2
+BAM;Marco convertible de Bosnia y Herzegovina;2
+BBD;Dólar de Barbados;2
+BDT;Taka bangladesí;2
+BGN;Lev búlgaro;2
+BHD;Dinar bareiní;3
+BIF;Franco burundés;0
+BMD;Dólar bermudeño;2
+BND;Dólar de Brunéi;2
+BOB;Boliviano;2
+BOV;Mvdol boliviano;2
+BRL;Real brasileño;2
+BSD;Dólar bahameño;2
+BTN;Ngultrum butanés;2
+BWP;Pula de Botsuana;2
+BYN;Rublo bielorruso;2
+BZD;Dólar beliceño;2
+CAD;Dólar canadiense;2
+CDF;Franco congoleño;2
+CHE;Euro WIR;2
+CHF;Franco suizo;2
+CHW;Franco WIR;2
+CLF;Unidad de fomento chilena;4
+CLP;Peso chileno;0
+CNY;Yuan chino;2
+COP;Peso colombiano;2
+COU;Unidad de valor real colombiana;2
+CRC;Colón costarricense;2
+CUP;Peso cubano;2
+CVE;Escudo caboverdiano;2
+CZK;Corona checa;2
+DJF;Franco yibutiano;0
+DKK;Corona danesa;2
+DOP;Peso dominicano;2
+DZD;Dinar argelino;2
+EGP;Libra egipcia;2
+ERN;Nakfa eritreo;2
+ETB;Birr etíope;2
+EUR;Euro;2
+FJD;Dólar fiyiano;2
+FKP;Libra malvinense;2
+GBP;Libra esterlina;2
+GEL;Lari georgiano;2
+GHS;Cedi ghanés;2
+GIP;Libra de Gibraltar;2
+GMD;Dalasi gambiano;2
+GNF;Franco guineano;0
+GTQ;Quetzal guatemalteco;2
+GYD;Dólar guyanés;2
+HKD;Dólar de Hong Kong;2
+HNL;Lempira hondureño;2
+HTG;Gourde haitiano;2
+HUF;Forinto húngaro;2
+IDR;Rupia indonesia;2
+ILS;Nuevo séquel israelí;2
+INR;Rupia india;2
+IQD;Dinar iraquí;3
+IRR;Rial iraní;2
+ISK;Corona islandesa;0
+JMD;Dólar jamaiquino;2
+JOD;Dinar jordano;3
+JPY;Yen japonés;0
+KES;Chelín keniano;2
+KGS;Som kirguís;2
+KHR;Riel camboyano;2
+KMF;Franco comorense;0
+KPW;Won norcoreano;2
+KRW;Won surcoreano;0
+KWD;Dinar kuwaití;3
+KYD;Dólar de las Islas Caimán;2
+KZT;Tenge kazajo;2
+LAK;Kip laosiano;2
+LBP;Libra libanesa;2
+LKR;Rupia de Sri Lanka;2
+LRD;Dólar liberiano;2
+LSL;Loti lesotense;2
+LYD;Dinar libio;3
+MAD;Dírham marroquí;2
+MDL;Leu moldavo;2
+MGA;Ariary malgache;2
+MKD;Denar macedonio;2
+MMK;Kyat birmano;2
+MNT;Tugrik mongol;2
+MOP;Pataca de Macao;2
+MRU;Uguiya mauritana;2
+MUR;Rupia mauriciana;2
+MVR;Rufiyaa maldiva;2
+MWK;Kwacha malauí;2
+MXN;Peso mexicano;2
+MXV;Unidad de inversión mexicana (UDI);2
+MYR;Ringgit malayo;2
+MZN;Metical mozambiqueño;2
+NAD;Dólar namibio;2
+NGN;Naira nigeriana;2
+NIO;Córdoba nicaragüense;2
+NOK;Corona noruega;2
+NPR;Rupia nepalí;2
+NZD;Dólar neozelandés;2
+OMR;Rial omaní;3
+PAB;Balboa panameño;2
+PEN;Sol peruano;2
+PGK;Kina de Papúa Nueva Guinea;2
+PHP;Peso filipino;2
+PKR;Rupia pakistaní;2
+PLN;Esloti polaco;2
+PYG;Guaraní paraguayo;0
+QAR;Rial catarí;2
+RON;Leu rumano;2
+RSD;Dinar serbio;2
+RUB;Rublo ruso;2
+RWF;Franco ruandés;0
+SAR;Riyal saudí;2
+SBD;Dólar de las Islas Salomón;2
+SCR;Rupia seychelense;2
+SDG;Libra sudanesa;2
+SEK;Corona sueca;2
+SGD;Dólar de Singapur;2
+SHP;Libra de Santa Elena;2
+SLE;Leone de Sierra Leona;2
+SOS;Chelín somalí;2
+SRD;Dólar surinamés;2
+SSP;Libra sursudanesa;2
+STN;Dobra de Santo Tomé y Príncipe;2
+SVC;Colón salvadoreño;2
+SYP;Libra siria;2
+SZL;Lilangeni suazi;2
+THB;Baht tailandés;2
+TJS;Somoni tayiko;2
+TMT;Manat turcomano;2
+TND;Dinar tunecino;3
+TOP;Paanga tongano;2
+TRY;Lira turca;2
+TTD;Dólar de Trinidad y Tobago;2
+TWD;Nuevo dólar taiwanés;2
+TZS;Chelín tanzano;2
+UAH;Grivna ucraniana;2
+UGX;Chelín ugandés;0
+USD;Dólar estadounidense;2
+USN;Dólar estadounidense (día siguiente);2
+UYI;Peso uruguayo en unidades indexadas (UI);0
+UYU;Peso uruguayo;2
+UYW;Unidad previsional uruguaya;4
+UZS;Som uzbeko;2
+VED;Bolívar digital venezolano;2
+VES;Bolívar soberano venezolano;2
+VND;Dong vietnamita;0
+VUV;Vatu vanuatuense;0
+WST;Tala samoano;2
+XAF;Franco CFA de África Central;0
+XCD;Dólar del Caribe Oriental;2
+XDR;Derechos especiales de giro (FMI);-
+XOF;Franco CFA de África Occidental;0
+XPF;Franco CFP;0
+YER;Rial yemení;2
+ZAR;Rand sudafricano;2
+ZMW;Kwacha zambiano;2
+ZWG;Oro de Zimbabue (ZiG);2
