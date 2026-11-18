@@ -1,0 +1,54 @@
+# Partida Doble — sistema contable didáctico (versión web, prueba de concepto)
+# Copyright (C) 2026 Gustavo Duarte
+# Licencia Pública General GNU (GPL), versión 3 o posterior (ver LICENSE).
+"""Puente entre la página web y el núcleo contable de la versión de escritorio (sin cambios)."""
+import json
+import time
+
+from partidadoble.contabilidad import Contabilidad, fmt_importe
+from partidadoble.base import fmt_fecha
+from partidadoble.db import conectar
+
+ESTADO = {}
+
+
+def abrir(ruta):
+    t = time.time()
+    con = conectar(ruta)          # migra la base si viene de una versión anterior, como el programa de escritorio
+    ctb = Contabilidad(con)
+    ESTADO.update(con=con, ctb=ctb)
+    emps = [dict(id=e["id"], codigo=e["codigo"], nombre=e["nombre"], inicio=e["inicio_ejercicio"] or "",
+                 cierre=e["cierre_ejercicio"] or "") for e in ctb.empresas()]
+    n = con.execute("SELECT COUNT(*) FROM asientos").fetchone()[0]
+    return json.dumps(dict(empresas=emps, asientos=n, segundos=round(time.time() - t, 3)))
+
+
+def _celda(tipo, v):
+    if v is None:
+        return ""
+    if tipo == "importe":
+        return fmt_importe(v)
+    if tipo == "fecha":
+        return fmt_fecha(v)
+    return str(v)
+
+
+def informe(tipo, emp, desde, hasta, nivel):
+    t = time.time()
+    ctb = ESTADO["ctb"].para_informes(emp, hasta, desde)
+    nivel = int(nivel)
+    if tipo == "balance":
+        rep = ctb.balance_comprobacion(emp, desde, hasta, nivel)
+    elif tipo == "situacion":
+        rep = ctb.estado_situacion(emp, hasta, nivel)
+    elif tipo == "resultados":
+        rep = ctb.estado_resultados(emp, desde, hasta, nivel)
+    else:
+        rep = ctb.libro_diario(emp, desde, hasta)
+    tipos = [c[1] for c in rep.columnas]
+    datos = dict(titulo=rep.titulo, subtitulo=rep.subtitulo,
+                 columnas=[[c[0], c[1]] for c in rep.columnas],
+                 filas=[[f.estilo, f.nivel, [_celda(tp, v) for tp, v in zip(tipos, f.valores)]] for f in rep.filas],
+                 notas=list(rep.notas))
+    datos["segundos"] = round(time.time() - t, 3)
+    return json.dumps(datos)

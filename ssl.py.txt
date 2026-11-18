@@ -1,0 +1,17 @@
+"""Sustituto mínimo de ssl para la versión web (Pyodide no trae ssl).
+
+En el navegador, las consultas al BCU y al INE no pasan por urllib: si algo intenta abrir una conexión
+segura desde Python, recibe un error claro en lugar de fallar al importar el núcleo contable."""
+
+
+class SSLError(OSError):
+    pass
+
+
+class SSLContext:
+    def __init__(self, *a, **k):
+        raise SSLError("En la versión web las conexiones al BCU y al INE se hacen desde el navegador.")
+
+
+def create_default_context(*a, **k):
+    return SSLContext()
