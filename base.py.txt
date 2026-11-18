@@ -1,0 +1,220 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Utilidades comunes: errores, formatos de fecha e importes y la estructura de los reportes."""
+import datetime as _dt
+import re
+from dataclasses import dataclass, field
+
+from . import plan_modelo as pm
+
+
+class ErrorContable(Exception):
+    """Error con un mensaje explicativo pensado para el alumno."""
+
+
+class ErrorDocumento(ErrorContable):
+    """El dígito verificador de una CI o un RUT no coincide. Se puede guardar igual si se confirma."""
+
+
+# ------------------------------------------------- documentos uruguayos
+
+PESOS_CI = [2, 9, 8, 7, 6, 3, 4]
+PESOS_RUT = [4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+
+
+def dv_ci(base):
+    """Dígito verificador de la cédula de identidad (base de hasta 7 dígitos)."""
+    base = str(base).zfill(7)
+    suma = sum(int(d) * p for d, p in zip(base, PESOS_CI))
+    return (10 - suma % 10) % 10
+
+
+def dv_rut(base):
+    """Dígito verificador del RUT (11 primeros dígitos), módulo 11:
+    resto 0 -> 0; resto 1 -> 6; otro resto -> 11 - resto."""
+    resto = sum(int(d) * p for d, p in zip(str(base), PESOS_RUT)) % 11
+    if resto == 0:
+        return 0
+    if resto == 1:
+        return 6
+    return 11 - resto
+
+
+def limpiar_documento(texto):
+    return re.sub(r"[\s.\-/]", "", texto or "")
+
+
+def validar_documento(doc_tipo, documento, forzar=False):
+    """Devuelve el documento sin puntos ni guiones. Verifica largo y dígito verificador de CI y RUT.
+    Con forzar=True se acepta un dígito verificador que no coincide (por ejemplo, para un caso real)."""
+    doc = limpiar_documento(documento)
+    if not doc:
+        return None
+    if doc_tipo == "CI":
+        if not re.fullmatch(r"\d{2,8}", doc):
+            raise ErrorContable("La cédula de identidad se escribe con números (hasta 7 más el verificador), "
+                                "por ejemplo 1.234.567-2.")
+        doc = doc.zfill(8)
+        esperado = dv_ci(doc[:7])
+        if int(doc[7]) != esperado and not forzar:
+            raise ErrorDocumento(f"El dígito verificador de la cédula {doc[:1]}.{doc[1:4]}.{doc[4:7]}-{doc[7]} no "
+                                 f"coincide: según el algoritmo debería ser {esperado}.")
+    elif doc_tipo == "RUT":
+        if not re.fullmatch(r"\d{12}", doc):
+            raise ErrorContable("El RUT tiene 12 dígitos (sin puntos ni guiones).")
+        esperado = dv_rut(doc[:11])
+        if int(doc[11]) != esperado and not forzar:
+            raise ErrorDocumento(f"El dígito verificador del RUT {doc} no coincide: según el algoritmo "
+                                 f"(módulo 11) debería ser {esperado}.")
+    return doc
+
+
+# ---------------------------------------------------------------- utilidades
+
+def parse_fecha(texto):
+    """Acepta dd/mm/aaaa, d/m/aa o aaaa-mm-dd. Devuelve 'AAAA-MM-DD'."""
+    t = (texto or "").strip()
+    if not t:
+        raise ErrorContable("Falta la fecha.")
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", t):
+            d = _dt.date.fromisoformat(t)
+        else:
+            p = re.split(r"[/\-.]", t)
+            if len(p) != 3:
+                raise ValueError
+            dia, mes, anio = (int(x) for x in p)
+            if anio < 100:
+                anio += 2000
+            d = _dt.date(anio, mes, dia)
+    except ValueError:
+        raise ErrorContable(f"La fecha «{texto}» no es válida. Use el formato dd/mm/aaaa.")
+    return d.isoformat()
+
+
+def _f(texto):
+    return parse_fecha(texto) if texto else None
+
+
+def fmt_fecha(iso):
+    if not iso:
+        return ""
+    a, m, d = iso.strip().split("-")        # strip: fechas «entre días» de la vista de informes (7.6)
+    return f"{d}/{m}/{a}"
+
+
+def parse_importe(texto):
+    """Convierte '1.234,56', '1.000', '1234.56' o '1234' a centésimos (entero).
+    Un punto seguido de exactamente 3 dígitos se toma como separador de miles."""
+    t = str(texto or "").strip().replace("$", "").replace(" ", "")
+    if not t:
+        return 0
+    if "," in t:
+        t = t.replace(".", "").replace(",", ".")
+    elif t.count(".") > 1 or re.fullmatch(r"\d{1,3}\.\d{3}", t):
+        t = t.replace(".", "")   # 1.000 o 1.234.567: el punto separa miles
+    try:
+        valor = round(float(t) * 100)
+    except ValueError:
+        raise ErrorContable(f"El importe «{texto}» no es un número válido.")
+    if valor < 0:
+        raise ErrorContable("Los importes se ingresan en positivo: el lado (Debe o Haber) indica el signo.")
+    return valor
+
+
+def fmt_importe(cent, parentesis=True, vacio_si_cero=False):
+    if cent is None:
+        return ""
+    if cent == 0 and vacio_si_cero:
+        return ""
+    neg = cent < 0
+    s = f"{abs(cent) / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    if neg:
+        return f"({s})" if parentesis else f"-{s}"
+    return s
+
+
+def parse_tc(texto):
+    """Tipo de cambio: acepta '40,125' o '40.125' (hasta 6 decimales). Devuelve float."""
+    t = str(texto or "").strip().replace(" ", "")
+    if not t:
+        raise ErrorContable("Falta el tipo de cambio.")
+    if "," in t:
+        t = t.replace(".", "").replace(",", ".")
+    try:
+        v = round(float(t), 6)
+    except ValueError:
+        raise ErrorContable(f"El tipo de cambio «{texto}» no es un número válido.")
+    if v <= 0:
+        raise ErrorContable("El tipo de cambio debe ser mayor que cero.")
+    return v
+
+
+def fmt_tc(v):
+    if v is None:
+        return ""
+    return f"{v:,.3f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def fmt_tc_preciso(v):
+    """Tipo de cambio con todos sus decimales (entre 3 y 6): 40,578 · 44,684494 · 0,006492. Se usa donde la
+    cotización se edita o se graba, para no perder los decimales que publica el BCU (7.6)."""
+    if v is None:
+        return ""
+    entero, dec = f"{v:,.6f}".split(".")
+    dec = dec.rstrip("0").ljust(3, "0")
+    return entero.replace(",", ".") + "," + dec
+
+
+def pesos_de(importe_me, tc):
+    """Convierte un importe en ME (centésimos) a moneda nacional (centésimos)."""
+    return int(round(importe_me * tc))
+
+
+def naturaleza_por_codigo(codigo):
+    g = codigo[0]
+    if g in "15":
+        return "D"
+    if g == "6":
+        return "A" if len(codigo) > 1 and codigo[1] == "2" else "D"
+    return "A"
+
+
+# ------------------------------------------------------------------ reportes
+
+@dataclass
+class Fila:
+    valores: list
+    estilo: str = "normal"   # normal | titulo | subtitulo | subtotal | total | alerta
+    nivel: int = 0           # sangría de la primera columna de texto
+
+
+@dataclass
+class Reporte:
+    titulo: str
+    subtitulo: str
+    columnas: list           # [(nombre, tipo, ancho)] tipo: texto | importe | fecha
+    filas: list = field(default_factory=list)
+    notas: list = field(default_factory=list)
+
+    def agregar(self, valores, estilo="normal", nivel=0):
+        self.filas.append(Fila(list(valores), estilo, nivel))
+
+
+SECCIONES_ESF = [("ACTIVO", ["AC", "ANC"]), ("PASIVO", ["PC", "PNC"])]
+SECCIONES_INGRESO = {"ING", "OI", "IF"}
+SECCIONES_GASTO = {"CV", "GD", "GA", "OG", "CF", "IR"}
+SECCIONES_ER = SECCIONES_INGRESO | SECCIONES_GASTO
+SIN_ASIGNAR = "SIN"   # filtro: movimientos sin centro de costos

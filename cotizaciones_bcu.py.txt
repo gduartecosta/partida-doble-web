@@ -1,0 +1,181 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+# Licencia Pública General GNU (GPL), versión 3 o posterior (ver LICENSE).
+"""Consulta de cotizaciones al web service del Banco Central del Uruguay (BCU).
+
+Lo que publica el BCU (verificado el 17/11/2026 contra el servicio, 01/10 a 17/11/2026):
+- Solo días hábiles. Para otra fecha se toma la última publicada anterior.
+- Comprador (TCC) y vendedor (TCV) son el mismo número en todas las series.
+- Dólar: cuatro series (2222, 2224, 2225, 2230) iguales en ese período. Se usa la 2225, «DLS. USA BILLETE»
+  del mercado local, tipo comprador (aprobado por la dirección del proyecto el 17/11/2026).
+- Las demás monedas se publican como ARBITRAJE contra el dólar (ArbAct) y una forma de arbitrar:
+    FormaArbitrar = 1: ArbAct son dólares por unidad   → pesos = ArbAct × dólar   (euro, libra…)
+    FormaArbitrar = 0: ArbAct son unidades por dólar   → pesos = dólar ÷ ArbAct   (real, yen…)
+  El tipo en pesos se CALCULA con esa fórmula y el dólar 2225 del mismo día, y se controla contra el valor en
+  pesos que publica el BCU: si difieren en más de una diezmilésima relativa, la cotización queda para revisar.
+- Las unidades indexadas (UI, UP) no son monedas: se toman tal como las publica el BCU, sin arbitraje.
+
+El código del BCU no es el ISO 4217 (por ejemplo el BCU dice «EURO» o «DLS.»): la correspondencia está en
+MONEDAS_BCU. Este módulo no usa la interfaz ni la base de datos: la red se inyecta (parámetro «transporte»)
+para poder probarlo sin internet.
+"""
+import datetime as _dt
+import socket
+import ssl
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+
+from .base import ErrorContable
+
+URL = "https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/"
+NS = "Cotiza"
+DOLAR = 2225          # DLS. USA BILLETE
+TOLERANCIA = 0.0001   # diferencia relativa admitida entre el cálculo por arbitraje y el valor en pesos del BCU
+DIAS_ATRAS = 15       # se buscan publicaciones hasta 15 días antes de la fecha pedida (feriados largos)
+
+# ISO 4217 → (código BCU, método). «dolar»: la serie base; «arbitraje»: fórmula; «directo»: unidades indexadas.
+MONEDAS_BCU = {
+    "USD": (2225, "dolar"),
+    "EUR": (1111, "arbitraje"), "GBP": (2700, "arbitraje"), "ARS": (500, "arbitraje"),
+    "BRL": (1000, "arbitraje"), "CLP": (1300, "arbitraje"), "AUD": (105, "arbitraje"),
+    "NZD": (1490, "arbitraje"), "ZAR": (1620, "arbitraje"), "DKK": (1800, "arbitraje"),
+    "CAD": (2309, "arbitraje"), "JPY": (3600, "arbitraje"), "PEN": (4000, "arbitraje"),
+    "CNY": (4150, "arbitraje"), "MXN": (4200, "arbitraje"), "HUF": (4300, "arbitraje"),
+    "TRY": (4400, "arbitraje"), "NOK": (4600, "arbitraje"), "PYG": (4800, "arbitraje"),
+    "ISK": (4900, "arbitraje"), "HKD": (5100, "arbitraje"), "KRW": (5300, "arbitraje"),
+    "RUB": (5400, "arbitraje"), "COP": (5500, "arbitraje"), "MYR": (5600, "arbitraje"),
+    "INR": (5700, "arbitraje"), "SEK": (5800, "arbitraje"), "CHF": (5900, "arbitraje"),
+    "XDR": (2, "arbitraje"),
+    "UYI": (9800, "directo"), "UYW": (9700, "directo"),
+}
+# Se dejan afuera: el bolívar (el BCU lo informa con el código viejo VEF, reemplazado por VES y VED),
+# los billetes de peso argentino y real (501, 1001) y la Unidad Reajustable (sin código ISO).
+SIEMPRE = ("USD", "EUR", "GBP")        # las que actualiza siempre el botón (pedido 3.2)
+
+
+class SinConexion(ErrorContable):
+    """No se pudo llegar al BCU (sin internet, sin respuesta o certificado inválido)."""
+
+
+class ErrorBCU(ErrorContable):
+    """El BCU respondió, pero con un error o con datos que no se pueden leer."""
+
+
+def _sobre(cuerpo):
+    return (f'<?xml version="1.0" encoding="utf-8"?><soapenv:Envelope '
+            f'xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cot="{NS}">'
+            f'<soapenv:Header/><soapenv:Body>{cuerpo}</soapenv:Body></soapenv:Envelope>').encode("utf-8")
+
+
+def transporte_http(servicio, cuerpo, timeout=20):
+    """POST SOAP real al BCU. Devuelve los bytes de la respuesta."""
+    pedido = urllib.request.Request(URL + servicio, data=cuerpo, method="POST",
+                                    headers={"Content-Type": "text/xml; charset=utf-8",
+                                             "SOAPAction": f"Cotizaaction/A{servicio.upper()[1:]}.Execute"})
+    try:
+        with urllib.request.urlopen(pedido, timeout=timeout, context=ssl.create_default_context()) as r:
+            return r.read()
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, ssl.SSLError) as e:
+        motivo = getattr(e, "reason", e)
+        raise SinConexion("No se pudo consultar al BCU (sin conexión a internet o el servicio no responde). "
+                          f"El programa sigue funcionando: puede cargar la cotización a mano.\nDetalle: {motivo}")
+
+
+def _texto(nodo, nombre):
+    x = nodo.find(f"{{{NS}}}{nombre}")
+    return x.text if x is not None and x.text is not None else None
+
+
+def leer_respuesta(datos):
+    """Convierte la respuesta SOAP de awsbcucotizaciones en una lista de dict
+    (fecha, codigo, nombre, tcc, tcv, arb, forma). Lanza ErrorBCU si el BCU informa un error."""
+    try:
+        raiz = ET.fromstring(datos)
+    except ET.ParseError as e:
+        raise ErrorBCU(f"La respuesta del BCU no se pudo leer ({e}).")
+    estado = raiz.find(f".//{{{NS}}}respuestastatus")
+    if estado is None:
+        raise ErrorBCU("La respuesta del BCU no tiene el formato esperado.")
+    if _texto(estado, "status") != "1":
+        mensaje = _texto(estado, "mensaje") or ""
+        codigo = _texto(estado, "codigoerror") or ""
+        if "no existen" in mensaje.lower() or "sin datos" in mensaje.lower():
+            return []
+        raise ErrorBCU(f"El BCU respondió con un error {codigo}: {mensaje}".strip())
+    out = []
+    for d in raiz.iter(f"{{{NS}}}datoscotizaciones.dato"):
+        try:
+            out.append(dict(fecha=_texto(d, "Fecha"), codigo=int(_texto(d, "Moneda")), nombre=_texto(d, "Nombre"),
+                            tcc=float(_texto(d, "TCC")), tcv=float(_texto(d, "TCV")),
+                            arb=float(_texto(d, "ArbAct") or 0), forma=int(_texto(d, "FormaArbitrar") or 0)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def consultar(codigos, desde, hasta, transporte=None):
+    """Cotizaciones publicadas por el BCU para esos códigos entre dos fechas (AAAA-MM-DD)."""
+    items = "".join(f"<cot:item>{int(c)}</cot:item>" for c in sorted(set(codigos)))
+    cuerpo = _sobre(f"<cot:wsbcucotizaciones.Execute><cot:Entrada><cot:Moneda>{items}</cot:Moneda>"
+                    f"<cot:FechaDesde>{desde}</cot:FechaDesde><cot:FechaHasta>{hasta}</cot:FechaHasta>"
+                    f"<cot:Grupo>0</cot:Grupo></cot:Entrada></cot:wsbcucotizaciones.Execute>")
+    return leer_respuesta((transporte or transporte_http)("awsbcucotizaciones", cuerpo))
+
+
+def pesos_por_arbitraje(arb, forma, dolar):
+    """Pesos por 1 unidad de la moneda, con la fórmula del arbitraje contra el dólar."""
+    if not arb:
+        return None
+    return arb * dolar if forma == 1 else dolar / arb
+
+
+def cotizaciones_para(fecha, monedas, transporte=None):
+    """Propuesta de cotizaciones al día 'fecha' (AAAA-MM-DD) para las monedas ISO pedidas.
+    Devuelve una lista de dict: moneda, codigo_bcu, fecha_pedida, fecha_efectiva, tc, detalle, revisar, aviso.
+    tc es None si el BCU no publicó la moneda en los DIAS_ATRAS días anteriores."""
+    hasta = _dt.date.fromisoformat(fecha)
+    desde = hasta - _dt.timedelta(days=DIAS_ATRAS)
+    pedidas = [m for m in dict.fromkeys(monedas) if m in MONEDAS_BCU]
+    codigos = {MONEDAS_BCU[m][0] for m in pedidas} | {DOLAR}
+    datos = consultar(codigos, desde.isoformat(), hasta.isoformat(), transporte)
+    por = {}
+    for d in datos:
+        if d["fecha"] and d["fecha"] <= fecha:
+            por.setdefault(d["codigo"], {})[d["fecha"]] = d
+    dolar = por.get(DOLAR, {})
+    out = []
+    for m in pedidas:
+        cod, metodo = MONEDAS_BCU[m]
+        serie = por.get(cod, {})
+        base = dict(moneda=m, codigo_bcu=cod, fecha_pedida=fecha, fecha_efectiva=None, tc=None, detalle="",
+                    revisar=False, aviso="")
+        if not serie:
+            out.append(dict(base, aviso=f"El BCU no publicó {m} entre el {desde:%d/%m/%Y} y el {hasta:%d/%m/%Y}."))
+            continue
+        f_ef = max(serie)
+        d = serie[f_ef]
+        if metodo in ("dolar", "directo"):
+            tc = round(d["tcc"], 6)
+            detalle = (f"BCU {cod} {d['nombre']}, comprador" if metodo == "dolar"
+                       else f"BCU {cod} {d['nombre']} (unidad indexada, sin arbitraje)")
+            out.append(dict(base, fecha_efectiva=f_ef, tc=tc, detalle=detalle))
+            continue
+        usd = dolar.get(f_ef)
+        if not usd:
+            out.append(dict(base, fecha_efectiva=f_ef, revisar=True,
+                            aviso=f"Falta el dólar {DOLAR} del {f_ef} para aplicar el arbitraje."))
+            continue
+        calc = pesos_por_arbitraje(d["arb"], d["forma"], usd["tcc"])
+        if calc is None:
+            out.append(dict(base, fecha_efectiva=f_ef, revisar=True, aviso=f"El BCU no informa arbitraje para {m}."))
+            continue
+        formula = (f"{d['arb']:g} × {usd['tcc']:g}" if d["forma"] == 1 else f"{usd['tcc']:g} ÷ {d['arb']:g}")
+        tc = round(calc, 6)
+        fila = dict(base, fecha_efectiva=f_ef, tc=tc,
+                    detalle=f"Arbitraje BCU {cod}: {formula} (dólar {DOLAR}) = {tc:g}")
+        if abs(calc - d["tcc"]) > TOLERANCIA * d["tcc"]:
+            fila.update(revisar=True, aviso=f"El cálculo por arbitraje ({tc:g}) no coincide con el valor en pesos "
+                                            f"que publica el BCU ({d['tcc']:g}). Revise antes de grabar.")
+        out.append(fila)
+    return out

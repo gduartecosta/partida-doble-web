@@ -1,0 +1,386 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Base de datos SQLite del sistema contable didáctico "Partida Doble".
+
+Toda la información (todas las empresas) vive en un único archivo .db.
+El alumno puede copiar ese archivo para entregarlo o llevarlo a otra PC.
+
+Los importes se guardan en CENTÉSIMOS (enteros) para evitar errores de
+redondeo: $ 1.234,56 se guarda como 123456.
+"""
+import sqlite3
+
+from .ain import COLUMNAS_FICHA
+
+VERSION_ESQUEMA = 10
+
+ESQUEMA = """
+CREATE TABLE IF NOT EXISTS meta (
+    clave TEXT PRIMARY KEY,
+    valor TEXT
+);
+
+-- Monedas (tabla común a todas las empresas)
+CREATE TABLE IF NOT EXISTS monedas (
+    codigo    TEXT PRIMARY KEY,          -- ISO 4217: UYU, USD, EUR...
+    nombre    TEXT NOT NULL,
+    simbolo   TEXT NOT NULL DEFAULT '$',
+    decimales INTEGER NOT NULL DEFAULT 2,
+    activa    INTEGER NOT NULL DEFAULT 1
+);
+
+-- Histórico de cotizaciones: cuántas unidades de moneda nacional vale 1 unidad
+CREATE TABLE IF NOT EXISTS cotizaciones (
+    moneda      TEXT NOT NULL REFERENCES monedas(codigo) ON UPDATE CASCADE,
+    fecha       TEXT NOT NULL,           -- AAAA-MM-DD
+    tipo_cambio REAL NOT NULL CHECK (tipo_cambio > 0),
+    PRIMARY KEY (moneda, fecha)
+);
+
+CREATE TABLE IF NOT EXISTS empresas (
+    id               INTEGER PRIMARY KEY,
+    codigo           TEXT NOT NULL UNIQUE,  -- alfanumérico elegido por el usuario
+    nombre           TEXT NOT NULL,
+    rut              TEXT,
+    moneda_nacional  TEXT NOT NULL DEFAULT 'UYU' REFERENCES monedas(codigo),
+    estructura       TEXT NOT NULL DEFAULT '1-1-1-1', -- dígitos que agrega cada nivel
+    inicio_ejercicio TEXT,                -- AAAA-MM-DD
+    cierre_ejercicio TEXT
+);
+
+-- Locales (sucursales) de la empresa
+CREATE TABLE IF NOT EXISTS locales (
+    id         INTEGER PRIMARY KEY,
+    empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    codigo     TEXT NOT NULL,
+    nombre     TEXT NOT NULL,
+    activo     INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (empresa_id, codigo)
+);
+
+-- Centros de costos
+CREATE TABLE IF NOT EXISTS centros_costo (
+    id         INTEGER PRIMARY KEY,
+    empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    codigo     TEXT NOT NULL,
+    nombre     TEXT NOT NULL,
+    activo     INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (empresa_id, codigo)
+);
+
+-- Libros: diario general y libros auxiliares
+CREATE TABLE IF NOT EXISTS libros (
+    id         INTEGER PRIMARY KEY,
+    empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    codigo     TEXT NOT NULL,
+    nombre     TEXT NOT NULL,
+    tipo       TEXT NOT NULL CHECK (tipo IN ('DIARIO', 'AUXILIAR')),
+    UNIQUE (empresa_id, codigo)
+);
+
+-- Plan de cuentas jerárquico.
+-- Rubros (no imputables) agrupan; las cuentas imputables reciben movimientos.
+CREATE TABLE IF NOT EXISTS cuentas (
+    id          INTEGER PRIMARY KEY,
+    empresa_id  INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    codigo      TEXT NOT NULL,
+    nombre      TEXT NOT NULL,
+    nivel       INTEGER NOT NULL,
+    padre_id    INTEGER REFERENCES cuentas(id),
+    imputable   INTEGER NOT NULL DEFAULT 0,   -- 1 = rubro con movimiento
+    naturaleza  TEXT NOT NULL CHECK (naturaleza IN ('D', 'A')), -- saldo normal
+    seccion     TEXT,          -- sección de los estados financieros (se hereda)
+    moneda      TEXT REFERENCES monedas(codigo), -- moneda de la cuenta (NULL = nacional)
+    local_id    INTEGER REFERENCES locales(id),        -- opcional
+    cc_id       INTEGER REFERENCES centros_costo(id),  -- opcional
+    descripcion TEXT,
+    UNIQUE (empresa_id, codigo)
+);
+
+CREATE TABLE IF NOT EXISTS asientos (
+    id         INTEGER PRIMARY KEY,
+    empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    numero     INTEGER NOT NULL,
+    fecha      TEXT NOT NULL,             -- AAAA-MM-DD
+    libro_id   INTEGER NOT NULL REFERENCES libros(id),
+    local_id   INTEGER NOT NULL REFERENCES locales(id),
+    concepto   TEXT NOT NULL DEFAULT '',
+    tipo       TEXT NOT NULL DEFAULT 'NORMAL', -- NORMAL, APERTURA, CIERRE, DIF_CAMBIO
+    UNIQUE (empresa_id, numero)
+);
+
+-- Movimientos del asiento. debe/haber siempre en moneda nacional (centésimos).
+-- Si la operación fue en moneda extranjera se guarda además el importe
+-- original y el tipo de cambio usado, para calcular luego la diferencia de cambio.
+-- Índices de precios para reexpresar informes (7.6): IPC e IPPN del INE, UI del BCU, o cargados a mano.
+CREATE TABLE IF NOT EXISTS indices (
+    serie   TEXT NOT NULL,            -- IPC, IPPN, UI u otra
+    mes     TEXT NOT NULL,            -- AAAA-MM
+    valor   REAL NOT NULL,
+    fuente  TEXT,
+    PRIMARY KEY (serie, mes)
+);
+
+CREATE TABLE IF NOT EXISTS movimientos (
+    id          INTEGER PRIMARY KEY,
+    asiento_id  INTEGER NOT NULL REFERENCES asientos(id) ON DELETE CASCADE,
+    orden       INTEGER NOT NULL,
+    cuenta_id   INTEGER NOT NULL REFERENCES cuentas(id),
+    concepto    TEXT NOT NULL DEFAULT '',
+    debe        INTEGER NOT NULL DEFAULT 0 CHECK (debe >= 0),
+    haber       INTEGER NOT NULL DEFAULT 0 CHECK (haber >= 0),
+    moneda      TEXT REFERENCES monedas(codigo),   -- NULL = moneda nacional
+    importe_me  INTEGER,                           -- importe original en ME (centésimos)
+    tipo_cambio REAL,
+    cc_id       INTEGER REFERENCES centros_costo(id),
+    CHECK ((debe > 0 AND haber = 0) OR (haber > 0 AND debe = 0))
+);
+
+-- Clientes y proveedores (auxiliares): una sola tabla por empresa
+CREATE TABLE IF NOT EXISTS terceros (
+    id            INTEGER PRIMARY KEY,
+    empresa_id    INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    codigo        TEXT NOT NULL,
+    nombre        TEXT NOT NULL,             -- nombre o razón social
+    tipo          TEXT NOT NULL CHECK (tipo IN ('C', 'P', 'A')),  -- Cliente, Proveedor, Ambos
+    doc_tipo      TEXT NOT NULL DEFAULT 'RUT',   -- RUT, CI, Pasaporte, Otro
+    documento     TEXT,
+    actividad     TEXT,       -- tipo de producto o servicio
+    area          TEXT,       -- área, zona o canal
+    direccion     TEXT,
+    localidad     TEXT,       -- localidad / departamento
+    telefono      TEXT,
+    email         TEXT,
+    contacto      TEXT,
+    plazo_dias    INTEGER NOT NULL DEFAULT 0,  -- plazo de pago habitual
+    limite_credito INTEGER,                    -- centésimos de moneda nacional
+    observaciones TEXT,
+    activo        INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (empresa_id, codigo)
+);
+
+-- Presupuestos: versiones o escenarios por ejercicio (normal, pesimista, optimista...)
+CREATE TABLE IF NOT EXISTS presupuestos (
+    id          INTEGER PRIMARY KEY,
+    empresa_id  INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    nombre      TEXT NOT NULL,
+    inicio      TEXT NOT NULL,          -- primer día del primer mes (AAAA-MM-01); abarca 12 meses
+    descripcion TEXT,
+    origen      TEXT,                   -- cómo se generó (copia, real, proyección...)
+    UNIQUE (empresa_id, nombre)
+);
+
+-- Importes mensuales. El general de la empresa es la suma de todas las líneas.
+-- importe: centésimos en sentido natural (ingreso esperado o gasto esperado, positivos).
+CREATE TABLE IF NOT EXISTS presupuesto_items (
+    id             INTEGER PRIMARY KEY,
+    presupuesto_id INTEGER NOT NULL REFERENCES presupuestos(id) ON DELETE CASCADE,
+    cuenta_id      INTEGER NOT NULL REFERENCES cuentas(id),
+    cc_id          INTEGER REFERENCES centros_costo(id),
+    local_id       INTEGER REFERENCES locales(id),
+    mes            INTEGER NOT NULL CHECK (mes BETWEEN 1 AND 12),
+    importe        INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_pres_item ON presupuesto_items
+    (presupuesto_id, cuenta_id, IFNULL(cc_id, 0), IFNULL(local_id, 0), mes);
+
+-- Lotes: asientos en espera que se revisan y se registran todos juntos (o ninguno)
+CREATE TABLE IF NOT EXISTS lotes (
+    id               INTEGER PRIMARY KEY,
+    empresa_id       INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    nombre           TEXT NOT NULL,
+    estado           TEXT NOT NULL DEFAULT 'ABIERTO' CHECK (estado IN ('ABIERTO', 'REGISTRADO')),
+    origen           TEXT,
+    creado           TEXT NOT NULL,
+    control_cantidad INTEGER,          -- cantidad de asientos esperada (control de lote)
+    control_total    INTEGER,          -- suma del Debe esperada, en centésimos
+    registrado       TEXT,
+    numeros          TEXT               -- números de asiento asignados al registrar
+);
+
+CREATE TABLE IF NOT EXISTS lote_asientos (
+    id        INTEGER PRIMARY KEY,
+    lote_id   INTEGER NOT NULL REFERENCES lotes(id) ON DELETE CASCADE,
+    orden     INTEGER NOT NULL,
+    fecha     TEXT NOT NULL,
+    libro_id  INTEGER NOT NULL REFERENCES libros(id),
+    local_id  INTEGER NOT NULL REFERENCES locales(id),
+    concepto  TEXT NOT NULL DEFAULT '',
+    lineas    TEXT NOT NULL,            -- movimientos en formato JSON
+    ref_externa TEXT                    -- identificador del asiento en la planilla de origen
+);
+
+-- Archivos importados: evita importar dos veces el mismo archivo
+CREATE TABLE IF NOT EXISTS importaciones (
+    id         INTEGER PRIMARY KEY,
+    empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    huella     TEXT NOT NULL,
+    archivo    TEXT,
+    fecha      TEXT NOT NULL,
+    lote_id    INTEGER REFERENCES lotes(id) ON DELETE SET NULL
+);
+
+-- Metas (líneas base) de los indicadores del tablero, por ejercicio; mes NULL = meta anual
+CREATE TABLE IF NOT EXISTS indicador_metas (
+    id         INTEGER PRIMARY KEY,
+    empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    inicio     TEXT NOT NULL,        -- inicio del ejercicio (AAAA-MM-DD)
+    clave      TEXT NOT NULL,        -- clave del indicador (LC, MB, DD...)
+    mes        INTEGER,
+    meta       REAL,
+    minimo     REAL,
+    maximo     REAL
+);
+
+-- modelos de asiento: asientos que se repiten (sueldos, cargas sociales, amortizaciones...)
+CREATE TABLE IF NOT EXISTS modelos_asiento (
+    id         INTEGER PRIMARY KEY,
+    empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    nombre     TEXT NOT NULL,
+    libro_id   INTEGER,
+    local_id   INTEGER,
+    concepto   TEXT,
+    notas      TEXT,
+    modificado TEXT,
+    UNIQUE (empresa_id, nombre)
+);
+
+CREATE TABLE IF NOT EXISTS modelo_lineas (
+    id         INTEGER PRIMARY KEY,
+    modelo_id  INTEGER NOT NULL REFERENCES modelos_asiento(id) ON DELETE CASCADE,
+    orden      INTEGER NOT NULL,
+    cuenta_id  INTEGER NOT NULL REFERENCES cuentas(id),
+    concepto   TEXT,
+    debe       INTEGER NOT NULL DEFAULT 0,   -- centésimos de moneda nacional
+    haber      INTEGER NOT NULL DEFAULT 0,
+    moneda     TEXT,
+    importe_me INTEGER,                      -- centésimos de la moneda extranjera
+    local_id   INTEGER,
+    cc_id      INTEGER,
+    tercero_id INTEGER
+);
+
+-- reclasificaciones: cambio de una cuenta por otra en asientos ya registrados (con registro para deshacer)
+CREATE TABLE IF NOT EXISTS reclasificaciones (
+    id             INTEGER PRIMARY KEY,
+    empresa_id     INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+    fecha_hora     TEXT NOT NULL,
+    origen_id      INTEGER,
+    origen_codigo  TEXT,
+    origen_nombre  TEXT,
+    destino_id     INTEGER,
+    destino_codigo TEXT,
+    destino_nombre TEXT,
+    desde          TEXT,
+    hasta          TEXT,
+    motivo         TEXT,
+    cantidad       INTEGER,
+    debe           INTEGER,
+    haber          INTEGER,
+    modelos        INTEGER DEFAULT 0,
+    lineas_modelo  TEXT,            -- ids de líneas de modelos cambiadas (JSON), para deshacer
+    deshecha       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS reclasificacion_movs (
+    id                 INTEGER PRIMARY KEY,
+    reclasificacion_id INTEGER NOT NULL REFERENCES reclasificaciones(id) ON DELETE CASCADE,
+    movimiento_id      INTEGER,
+    asiento_id         INTEGER,
+    asiento_numero     INTEGER,
+    fecha              TEXT,
+    concepto           TEXT,
+    debe               INTEGER,
+    haber              INTEGER,
+    tercero_anterior   INTEGER,
+    vencimiento_anterior TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_mov_cuenta ON movimientos(cuenta_id);
+CREATE INDEX IF NOT EXISTS ix_mov_asiento ON movimientos(asiento_id);
+CREATE INDEX IF NOT EXISTS ix_asi_fecha ON asientos(empresa_id, fecha);
+CREATE INDEX IF NOT EXISTS ix_cta_padre ON cuentas(padre_id);
+"""
+
+
+# Columnas agregadas después de la versión 1 (se agregan solas a bases viejas)
+MIGRACIONES = [
+    # etapa 2: el movimiento puede cancelar una operación en ME de un asiento anterior
+    ("movimientos", "ref_asiento_id", "INTEGER REFERENCES asientos(id)"),
+    # etapa 2: cuentas donde se imputan las diferencias de cambio
+    ("empresas", "cta_dif_ganada", "INTEGER REFERENCES cuentas(id)"),
+    ("empresas", "cta_dif_perdida", "INTEGER REFERENCES cuentas(id)"),
+    # etapa 3: local imputado en cada movimiento (si falta, vale el del encabezado del asiento)
+    ("movimientos", "local_id", "INTEGER REFERENCES locales(id)"),
+    # auxiliar de clientes y proveedores
+    ("cuentas", "auxiliar", "TEXT"),                       # NULL, 'C' clientes o 'P' proveedores
+    ("movimientos", "tercero_id", "INTEGER REFERENCES terceros(id)"),
+    ("movimientos", "vencimiento", "TEXT"),
+    # 7.6: tipo de asiento en los lotes (los ajustes por diferencia de cambio se importan como tales)
+    ("lote_asientos", "tipo", "TEXT NOT NULL DEFAULT 'NORMAL'"),
+    # 7.6: de dónde salió cada cotización: 'manual', 'importado' o 'BCU' (NULL = cargada antes de la 7.6)
+    ("cotizaciones", "fuente", "TEXT"),
+    ("cotizaciones", "detalle", "TEXT"),
+    # 7.6: ficha del tercero (recorte de la ficha de la empresa). «nombre» sigue siendo la razón social.
+    ("terceros", "nombre_comercial", "TEXT"),
+    ("terceros", "tipo_societario", "TEXT"),
+    ("terceros", "ciiu", "TEXT"),
+    ("terceros", "giro", "TEXT"),
+    ("terceros", "departamento", "TEXT"),
+    # 7.6: modelos de asiento con periodicidad y líneas calculadas
+    ("modelos_asiento", "periodicidad", "TEXT NOT NULL DEFAULT 'eventual'"),
+    ("modelos_asiento", "meses", "TEXT"),                  # JSON: meses en que corresponde (fechas específicas)
+    ("modelo_lineas", "lado", "TEXT"),                     # 'D' o 'H'
+    ("modelo_lineas", "calculo", "TEXT NOT NULL DEFAULT 'fijo'"),   # fijo, ingresar, porcentaje, cuadre
+    ("modelo_lineas", "porcentaje", "REAL"),
+    ("modelo_lineas", "base", "TEXT"),                     # JSON: números de las líneas que forman la base
+    # 7.6 (18/11/2026): cierre del ejercicio
+    ("empresas", "cta_resultado_ejercicio", "INTEGER REFERENCES cuentas(id)"),
+] + [("empresas", c, t) for c, t in COLUMNAS_FICHA]     # 7.6: ficha de la empresa (Formulario E de la AIN)
+
+DIARIO_GENERAL = ("DG", "Diario general", "DIARIO")
+
+
+def _migrar(con):
+    for tabla, columna, tipo in MIGRACIONES:
+        cols = {r[1] for r in con.execute(f"PRAGMA table_info({tabla})")}
+        if columna not in cols:
+            con.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_mov_tercero ON movimientos(tercero_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_mov_cta_ter ON movimientos(cuenta_id, tercero_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_mov_ref ON movimientos(ref_asiento_id)")
+    # 7.6: las líneas de modelos de versiones anteriores son importes fijos; el lado sale del importe
+    con.execute("UPDATE modelo_lineas SET lado=CASE WHEN haber>0 THEN 'H' ELSE 'D' END WHERE lado IS NULL")
+    # 7.6: el nombre comercial de los terceros de versiones anteriores arranca igual a la razón social
+    con.execute("UPDATE terceros SET nombre_comercial=nombre WHERE nombre_comercial IS NULL")
+    # 7.6: toda empresa tiene su Diario general (código DG), que no se puede eliminar
+    for (emp,) in con.execute("SELECT id FROM empresas WHERE id NOT IN "
+                              "(SELECT empresa_id FROM libros WHERE codigo=?)", (DIARIO_GENERAL[0],)).fetchall():
+        con.execute("INSERT INTO libros(empresa_id,codigo,nombre,tipo) VALUES (?,?,?,?)", (emp, *DIARIO_GENERAL))
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('version_esquema', ?)", (str(VERSION_ESQUEMA),))
+
+
+def conectar(ruta):
+    con = sqlite3.connect(ruta)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA foreign_keys = ON")
+    con.executescript(ESQUEMA)
+    _migrar(con)
+    con.execute("INSERT OR IGNORE INTO monedas(codigo, nombre, simbolo) "
+                "VALUES ('UYU', 'Peso uruguayo', '$')")
+    con.execute("INSERT OR IGNORE INTO monedas(codigo, nombre, simbolo) "
+                "VALUES ('USD', 'Dólar estadounidense', 'U$S')")
+    con.commit()
+    return con

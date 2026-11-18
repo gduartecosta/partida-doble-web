@@ -1,0 +1,640 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Tablero de indicadores de gestión.
+
+Cada indicador se calcula con los datos de la contabilidad (operativa diaria) y se muestra en tres series:
+  - REAL del ejercicio en curso,
+  - AÑO ANTERIOR (mismo período del ejercicio anterior),
+  - PLANIFICADO: para los márgenes, calculado con el presupuesto; para el resto, la META cargada.
+Vista MENSUAL (cada mes por separado) o ACUMULADA (desde el inicio del ejercicio hasta cada fecha).
+
+Las líneas base de cada indicador son la meta y un rango aceptable (mínimo y máximo): el semáforo es verde
+dentro del rango, amarillo cerca de los límites y rojo fuera.
+
+Criterios (para que los valores sean comparables entre un mes y un período más largo):
+  - Los indicadores de balance usan los saldos a la fecha de cierre del período.
+  - Rotaciones y días usan saldos promedio (inicio y fin del período) y se expresan en días o en veces por año.
+  - ROA, ROE y rotación del activo se ANUALIZAN (× 365 / días del período).
+  - Deudores y proveedores incluyen IVA; por eso las ventas y compras se llevan a importes con IVA.
+"""
+import bisect
+import datetime as _dt
+
+from .base import SECCIONES_ER, SECCIONES_GASTO, ErrorContable, Reporte, fmt_fecha, fmt_importe, parse_fecha
+
+CATEGORIAS = ["Liquidez", "Rentabilidad", "Endeudamiento", "Actividad", "EBITDA"]
+TASA_IVA = 0.22
+# Rubros del plan de cuentas que usan los indicadores (códigos del plan modelo)
+# Rubros que el tablero necesita identificar. Los códigos dependen del plan de cada empresa: estos son los del
+# plan modelo del programa; para otro plan se buscan por nombre o se configuran (rubros_tablero / fijar_rubros).
+RUBROS = {"disponible": "111", "deudores": "112", "inventario": "114", "proveedores": "211", "intereses": "5411"}
+NOMBRES_RUBROS = {
+    "disponible": ("Disponibilidades / efectivo", ("efectivo y equivalentes", "disponibilidades")),
+    "deudores": ("Deudores comerciales / créditos por ventas", ("deudores comerciales", "creditos por ventas")),
+    "inventario": ("Inventarios / bienes de cambio", ("inventarios", "bienes de cambio")),
+    "proveedores": ("Acreedores comerciales / deudas comerciales", ("acreedores comerciales", "deudas comerciales")),
+    "intereses": ("Intereses perdidos", ("intereses perdidos",)),
+}
+
+# clave: (nombre, categoría, unidad, sentido, fórmula)
+#   unidad: veces | % | dias | $        sentido: mayor (más es mejor) | menor (menos es mejor)
+INDICADORES = {
+    "LC": ("Liquidez corriente", "Liquidez", "veces", "mayor", "Activo corriente / Pasivo corriente"),
+    "PA": ("Prueba ácida", "Liquidez", "veces", "mayor", "(Activo corriente − Bienes de cambio) / Pasivo corriente"),
+    "DIN": ("Disponibilidad inmediata", "Liquidez", "veces", "mayor", "Disponibilidades / Pasivo corriente"),
+    "CT": ("Capital de trabajo", "Liquidez", "$", "mayor", "Activo corriente − Pasivo corriente"),
+    "MB": ("Margen bruto", "Rentabilidad", "%", "mayor", "(Ventas − Costo de ventas) / Ventas × 100"),
+    "MO": ("Margen operativo", "Rentabilidad", "%", "mayor", "Resultado operativo / Ventas × 100"),
+    "MN": ("Margen neto", "Rentabilidad", "%", "mayor", "Resultado del ejercicio / Ventas × 100"),
+    "ROA": ("Rentabilidad del activo (ROA)", "Rentabilidad", "%", "mayor",
+            "Resultado anualizado / Activo promedio × 100"),
+    "ROE": ("Rentabilidad del patrimonio (ROE)", "Rentabilidad", "%", "mayor",
+            "Resultado anualizado / Patrimonio promedio × 100"),
+    "EP": ("Endeudamiento sobre patrimonio", "Endeudamiento", "veces", "menor", "Pasivo / Patrimonio"),
+    "EA": ("Endeudamiento sobre activo", "Endeudamiento", "%", "menor", "Pasivo / Activo × 100"),
+    "PCD": ("Porción corriente de la deuda", "Endeudamiento", "%", "menor", "Pasivo corriente / Pasivo × 100"),
+    "CI": ("Cobertura de intereses", "Endeudamiento", "veces", "mayor", "Resultado operativo / Intereses perdidos"),
+    "DD": ("Días de cobro a deudores", "Actividad", "dias", "menor",
+           "Deudores promedio / Ventas con IVA × días del período"),
+    "DINV": ("Días de inventario", "Actividad", "dias", "menor",
+             "Bienes de cambio promedio / Costo de ventas × días del período"),
+    "DP": ("Días de pago a proveedores", "Actividad", "dias", "mayor",
+           "Proveedores promedio / Compras con IVA × días del período"),
+    "CC": ("Ciclo de caja", "Actividad", "dias", "menor", "Días de deudores + días de inventario − días de proveedores"),
+    "RA": ("Rotación del activo", "Actividad", "veces", "mayor", "Ventas anualizadas / Activo promedio"),
+    # 7.6 (18/11/2026): análisis del EBITDA. EBITDA ajustado = resultado operativo + depreciaciones y amortizaciones
+    # − otros ingresos + otros gastos (sin sus depreciaciones). «12 meses» = los últimos 12 meses a la fecha.
+    "EBM": ("Margen EBITDA ajustado", "EBITDA", "%", "mayor", "EBITDA ajustado / Ventas × 100"),
+    "EBC": ("Cobertura de intereses con EBITDA", "EBITDA", "veces", "mayor",
+            "EBITDA de 12 meses / Intereses perdidos de 12 meses"),
+    "EBD": ("Deuda financiera neta / EBITDA", "EBITDA", "veces", "menor",
+            "(Deuda financiera − Efectivo y equivalentes) / EBITDA de 12 meses"),
+    "EBA": ("EBITDA sobre activo", "EBITDA", "%", "mayor", "EBITDA de 12 meses / Activo × 100"),
+    "EBK": ("Conversión del EBITDA en caja", "EBITDA", "%", "mayor",
+            "(EBITDA − Aumento del capital de trabajo operativo) / EBITDA × 100"),
+    "EBG": ("Crecimiento del EBITDA", "EBITDA", "%", "mayor",
+            "EBITDA ajustado / EBITDA ajustado del mismo período del año anterior × 100 − 100"),
+}
+POR_CENTRO = {"MB", "MO", "MN", "EBM"}           # los únicos que tienen sentido por centro de costos
+DESDE_PRESUPUESTO = {"MB", "MO", "MN"}    # planificado calculado con el presupuesto
+MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"]
+
+
+def fmt_indicador(valor, unidad, corto=False):
+    if valor is None:
+        return "s/d"
+    if unidad == "$":
+        if corto and abs(valor) >= 100000000:
+            return f"$ {valor / 100000000:,.1f} M".replace(",", "X").replace(".", ",").replace("X", ".")
+        return "$ " + fmt_importe(round(valor))
+    if unidad == "%":
+        return f"{valor:,.1f} %".replace(",", "X").replace(".", ",").replace("X", ".")
+    if unidad == "dias":
+        return f"{valor:,.0f} días".replace(",", ".")
+    return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def estado_semaforo(valor, minimo, maximo):
+    """verde dentro del rango; amarillo hasta un 10 % del rango por fuera; rojo más lejos."""
+    if valor is None or (minimo is None and maximo is None):
+        return "s/d"
+    lo = minimo if minimo is not None else float("-inf")
+    hi = maximo if maximo is not None else float("inf")
+    if lo <= valor <= hi:
+        return "verde"
+    ancho = (hi - lo) if minimo is not None and maximo is not None else abs(lo if minimo is not None else hi)
+    tolerancia = 0.10 * (ancho or 1)
+    if lo - tolerancia <= valor <= hi + tolerancia:
+        return "amarillo"
+    return "rojo"
+
+
+def estado_indicador(valor, minimo, maximo, plan=None, sentido="mayor"):
+    """Semáforo con el rango aceptable; si no hay rango (por ejemplo, por centro de costos), compara con el plan:
+    verde si es igual o mejor, amarillo si es hasta un 10 % peor, rojo si es más."""
+    if minimo is not None or maximo is not None:
+        return estado_semaforo(valor, minimo, maximo)
+    if valor is None or plan is None:
+        return "s/d"
+    peor = (plan - valor) if sentido == "mayor" else (valor - plan)
+    if peor <= 0:
+        return "verde"
+    return "amarillo" if peor <= 0.10 * abs(plan) else "rojo"
+
+
+def texto_rango(minimo, maximo, unidad):
+    if minimo is not None and maximo is not None:
+        return f"{fmt_indicador(minimo, unidad)} a {fmt_indicador(maximo, unidad)}"
+    if minimo is not None:
+        return f"desde {fmt_indicador(minimo, unidad)}"
+    if maximo is not None:
+        return f"hasta {fmt_indicador(maximo, unidad)}"
+    return ""
+
+
+def _d(texto_iso):
+    return _dt.date.fromisoformat(texto_iso.strip())
+
+
+def _hace_un_anio(iso, mas_dias=0):
+    """La misma fecha un año antes (el 29/02 pasa al 28/02), más 'mas_dias' días."""
+    d = _d(iso)
+    try:
+        r = d.replace(year=d.year - 1)
+    except ValueError:
+        r = d.replace(year=d.year - 1, day=28)
+    return (r + _dt.timedelta(days=mas_dias)).isoformat()
+
+
+def _div(a, b):
+    return a / b if b else None
+
+
+class TableroMixin:
+    """Indicadores de gestión (se integran a Contabilidad)."""
+
+    # ----------------------------------------------------------- ejercicio
+    def ejercicio_de(self, emp, fecha):
+        """Fecha de inicio (AAAA-MM-DD) del ejercicio que contiene la fecha."""
+        e = self.empresa(emp)
+        f = _d(parse_fecha(fecha))
+        ini = _d(e["inicio_ejercicio"]) if e["inicio_ejercicio"] else _dt.date(f.year, 1, 1)
+        cand = ini.replace(year=f.year)
+        if cand > f:
+            cand = cand.replace(year=f.year - 1)
+        return cand.isoformat()
+
+    @staticmethod
+    def meses_ejercicio(inicio):
+        d = _d(inicio)
+        out = []
+        for _ in range(12):
+            sig = (d.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
+            out.append((d, sig - _dt.timedelta(days=1)))
+            d = sig
+        return out
+
+    # ------------------------------------------------------------ magnitudes
+    def _saldos_a(self, emp, fecha, cache):
+        """Saldos patrimoniales a una fecha (centésimos, en sentido natural)."""
+        k = ("s", fecha)
+        if k in cache:
+            return cache[k]
+        mapa = cache.setdefault("mapa", self.mapa_cuentas(emp))
+        rub = cache.setdefault("rubros", self.rubros_tablero(emp))
+        reb = cache.setdefault("rubros_ebitda", self.rubros_ebitda(emp))
+        s = dict(AC=0, ANC=0, PC=0, PNC=0, PAT=0, disponible=0, deudores=0, inventario=0, proveedores=0, deuda=0)
+        for cid, (d, h) in self._sumas_hasta(emp, fecha, cache).items():
+            c = mapa[cid]
+            sec = c["seccion_ef"]
+            if sec in ("AC", "ANC"):
+                s[sec] += d - h
+            elif sec in ("PC", "PNC", "PAT"):
+                s[sec] += h - d
+            elif sec in SECCIONES_ER:
+                s["PAT"] += h - d            # resultado del ejercicio no cerrado
+            for clave in ("disponible", "deudores", "inventario"):
+                if c["codigo"].startswith(rub[clave]):
+                    s[clave] += d - h
+            if c["codigo"].startswith(rub["proveedores"]):
+                s["proveedores"] += h - d
+            if reb["deuda"] and c["codigo"].startswith(reb["deuda"]) and sec in ("PC", "PNC"):
+                s["deuda"] += h - d
+        s["A"] = s["AC"] + s["ANC"]
+        s["P"] = s["PC"] + s["PNC"]
+        cache[k] = s
+        return s
+
+    def rubros_tablero(self, emp, solo_detectados=False):
+        """{clave: tupla de prefijos de código} de los rubros que usa el tablero.
+        Orden: lo configurado para la empresa; si no, el rubro del plan modelo (si existe con ese nombre);
+        si no, el rubro de menor nivel cuyo nombre coincide."""
+        import json
+        guardado = self.con.execute("SELECT valor FROM meta WHERE clave=?", (f"rubros_tablero:{emp}",)).fetchone()
+        conf = json.loads(guardado[0]) if guardado and not solo_detectados else {}
+        ctas = self.cuentas(emp)
+        por_cod = {c["codigo"]: c for c in ctas}
+        from .planes import _clave
+        out = {}
+        for k, (_, nombres) in NOMBRES_RUBROS.items():
+            if conf.get(k):
+                out[k] = tuple(conf[k])
+                continue
+            c = por_cod.get(RUBROS[k])
+            if c and any(n in _clave(c["nombre"]) for n in nombres):
+                out[k] = (RUBROS[k],)
+                continue
+            cand = [c for c in ctas if any(n in _clave(c["nombre"]) for n in nombres)]
+            cand.sort(key=lambda c: (len(c["codigo"]), c["codigo"]))
+            out[k] = (cand[0]["codigo"],) if cand else ("~",)       # «~» no coincide con ningún código
+        return out
+
+    def rubros_ebitda(self, emp):
+        """{"dya": códigos de depreciaciones y amortizaciones, "deuda": rubros de deuda financiera}, como tuplas.
+        Lo configurado para la empresa; si no, se detectan por el nombre: cuentas de gasto que dicen
+        depreciación o amortización (no las acumuladas) y rubros de pasivo que dicen financiero o préstamo."""
+        import json
+        from .planes import _clave
+        guardado = self.con.execute("SELECT valor FROM meta WHERE clave=?", (f"rubros_ebitda:{emp}",)).fetchone()
+        conf = json.loads(guardado[0]) if guardado else {}
+        mapa = self.mapa_cuentas(emp)
+        out = {}
+        if conf.get("dya"):
+            out["dya"] = tuple(conf["dya"])
+        else:
+            out["dya"] = tuple(c["codigo"] for c in sorted(mapa.values(), key=lambda x: x["codigo"])
+                               if c["imputable"] and c["seccion_ef"] in SECCIONES_GASTO
+                               and any(p in _clave(c["nombre"]) for p in ("deprecia", "amortiza"))
+                               and "acumulad" not in _clave(c["nombre"]))
+        if conf.get("deuda"):
+            out["deuda"] = tuple(conf["deuda"])
+        else:
+            cand = sorted((c for c in mapa.values() if c["seccion_ef"] in ("PC", "PNC") and c["nivel"] >= 2
+                           and any(p in _clave(c["nombre"]) for p in ("financier", "prestamo"))),
+                          key=lambda x: (len(x["codigo"]), x["codigo"]))
+            elegidos = []
+            for c in cand:
+                if not any(c["codigo"].startswith(e) for e in elegidos):
+                    elegidos.append(c["codigo"])
+            out["deuda"] = tuple(elegidos)
+        return out
+
+    def fijar_rubros_ebitda(self, emp, dya="", deuda=""):
+        """Códigos separados por coma. Vacío = detección automática por el nombre."""
+        import json
+        limpio = {}
+        for clave, texto, nombre in (("dya", dya, "Depreciaciones y amortizaciones"), ("deuda", deuda, "Deuda financiera")):
+            cods = [x.replace(".", "").strip() for x in str(texto or "").split(",") if x.strip()]
+            for cod in cods:
+                if not self.cuenta_por_codigo(emp, cod):
+                    raise ErrorContable(f"{nombre}: el código {cod} no existe en el plan.")
+            if cods:
+                limpio[clave] = cods
+        with self.con:
+            self.con.execute("INSERT OR REPLACE INTO meta(clave, valor) VALUES (?, ?)",
+                             (f"rubros_ebitda:{emp}", json.dumps(limpio)))
+
+    def fijar_rubros_tablero(self, emp, rubros):
+        """rubros: {clave: «código» o «código, código»}. Vacío = detección automática."""
+        import json
+        limpio = {}
+        for k, v in rubros.items():
+            if k not in NOMBRES_RUBROS:
+                continue
+            cods = [x.replace(".", "").strip() for x in str(v or "").split(",") if x.strip()]
+            for cod in cods:
+                if not self.cuenta_por_codigo(emp, cod):
+                    raise ErrorContable(f"{NOMBRES_RUBROS[k][0]}: el código {cod} no existe en el plan.")
+            if cods:
+                limpio[k] = cods
+        with self.con:
+            self.con.execute("INSERT OR REPLACE INTO meta(clave, valor) VALUES (?, ?)",
+                             (f"rubros_tablero:{emp}", json.dumps(limpio)))
+
+    def _sumas_hasta(self, emp, fecha, cache):
+        """Sumas acumuladas desde el inicio hasta una fecha. Para fin de mes usa totales mensuales
+        calculados con una sola consulta (el tablero pide 24 cierres de mes)."""
+        sig = _d(fecha) + _dt.timedelta(days=1)
+        if sig.day != 1:
+            return self.sumas(emp, None, fecha)
+        if "acum" not in cache:
+            por_mes = {}
+            for mes, cid, d, h in self.con.execute(
+                    "SELECT substr(a.fecha,1,7), m.cuenta_id, SUM(m.debe), SUM(m.haber) FROM movimientos m "
+                    "JOIN asientos a ON a.id=m.asiento_id WHERE a.empresa_id=? GROUP BY 1, 2", (emp,)):
+                por_mes.setdefault(mes, {})[cid] = (d, h)
+            meses = sorted(por_mes)
+            acum, corrida = {}, {}
+            for mes in meses:
+                for cid, (d, h) in por_mes[mes].items():
+                    v = corrida.get(cid, (0, 0))
+                    corrida[cid] = (v[0] + d, v[1] + h)
+                acum[mes] = dict(corrida)
+            cache["acum"] = (meses, acum)
+        meses, acum = cache["acum"]
+        mes = fecha[:7]
+        i = bisect.bisect_right(meses, mes)
+        return acum[meses[i - 1]] if i else {}
+
+    def _flujos(self, emp, desde, hasta, cc_id, cache):
+        k = ("f", desde, hasta, cc_id)
+        if k in cache:
+            return cache[k]
+        mapa = cache.setdefault("mapa", self.mapa_cuentas(emp))
+        rub = cache.setdefault("rubros", self.rubros_tablero(emp))
+        reb = cache.setdefault("rubros_ebitda", self.rubros_ebitda(emp))
+        f = dict.fromkeys(["ING", "CV", "OI", "GD", "GA", "OG", "IF", "CF", "IR", "intereses", "dya", "dya_og"], 0)
+        for cid, (d, h) in self.sumas(emp, desde, hasta, None, cc_id).items():
+            c = mapa[cid]
+            sec = c["seccion_ef"]
+            if sec in SECCIONES_ER:
+                f[sec] += (d - h) if sec in SECCIONES_GASTO else (h - d)
+                if c["codigo"].startswith(rub["intereses"]):
+                    f["intereses"] += d - h
+                if reb["dya"] and sec in SECCIONES_GASTO and c["codigo"].startswith(reb["dya"]):
+                    f["dya"] += d - h
+                    if sec == "OG":
+                        f["dya_og"] += d - h
+        cache[k] = f
+        return f
+
+    @staticmethod
+    def ebitdas(f):
+        """(EBITDA reportado, EBITDA ajustado) de unos flujos de _flujos."""
+        oper = f["ING"] - f["CV"] + f["OI"] - f["GD"] - f["GA"] - f["OG"]
+        reportado = oper + f["dya"]
+        return reportado, reportado - f["OI"] + (f["OG"] - f["dya_og"])
+
+    @staticmethod
+    def _resultados(f):
+        bruto = f["ING"] - f["CV"]
+        oper = bruto + f["OI"] - f["GD"] - f["GA"] - f["OG"]
+        neto = oper + f["IF"] - f["CF"] - f["IR"]
+        return bruto, oper, neto
+
+    def valores_indicadores(self, emp, desde, hasta, cc_id=None, cache=None):
+        """{clave: valor} de todos los indicadores para un período (con centro de costos, solo márgenes)."""
+        cache = {} if cache is None else cache
+        f = self._flujos(emp, desde, hasta, cc_id, cache)
+        bruto, oper, neto = self._resultados(f)
+        v = {k: None for k in INDICADORES}
+        if f["ING"]:
+            v["MB"] = bruto / f["ING"] * 100
+            v["MO"] = oper / f["ING"] * 100
+            v["MN"] = neto / f["ING"] * 100
+        _, eb_aj = self.ebitdas(f)
+        if f["ING"]:
+            v["EBM"] = eb_aj / f["ING"] * 100
+        if cc_id:
+            return v
+        dias = (_d(hasta) - _d(desde)).days + 1
+        fin = self._saldos_a(emp, hasta, cache)
+        ini = self._saldos_a(emp, (_d(desde) - _dt.timedelta(days=1)).isoformat(), cache)
+        prom = {k: (fin[k] + ini[k]) / 2 for k in fin}
+        anual = 365 / dias
+        v["LC"] = _div(fin["AC"], fin["PC"])
+        v["PA"] = _div(fin["AC"] - fin["inventario"], fin["PC"])
+        v["DIN"] = _div(fin["disponible"], fin["PC"])
+        v["CT"] = fin["AC"] - fin["PC"]
+        v["ROA"] = _div(neto * anual * 100, prom["A"])
+        v["ROE"] = _div(neto * anual * 100, prom["PAT"])
+        v["EP"] = _div(fin["P"], fin["PAT"])
+        v["EA"] = _div(fin["P"] * 100, fin["A"])
+        v["PCD"] = _div(fin["PC"] * 100, fin["P"])
+        v["CI"] = _div(oper, f["intereses"])
+        compras = f["CV"] + fin["inventario"] - ini["inventario"]
+        dd = _div(prom["deudores"] * dias, f["ING"] * (1 + TASA_IVA))
+        dinv = _div(prom["inventario"] * dias, f["CV"])
+        dp = _div(prom["proveedores"] * dias, compras * (1 + TASA_IVA)) if compras > 0 else None
+        v["DD"], v["DINV"], v["DP"] = dd, dinv, dp
+        v["CC"] = dd + dinv - dp if None not in (dd, dinv, dp) else None
+        v["RA"] = _div(f["ING"] * anual, prom["A"])
+        # EBITDA: los indicadores contra saldos usan los últimos 12 meses a la fecha
+        f12 = self._flujos(emp, _hace_un_anio(hasta, 1), hasta, None, cache)
+        _, eb12 = self.ebitdas(f12)
+        v["EBC"] = _div(eb12, f12["intereses"]) if f12["intereses"] > 0 else None
+        v["EBD"] = _div(fin["deuda"] - fin["disponible"], eb12) if eb12 > 0 else None
+        v["EBA"] = _div(eb12 * 100, fin["A"])
+        cto = lambda s: s["deudores"] + s["inventario"] - s["proveedores"]   # noqa: E731
+        v["EBK"] = _div((eb_aj - (cto(fin) - cto(ini))) * 100, eb_aj) if eb_aj > 0 else None
+        fa = self._flujos(emp, _hace_un_anio(desde), _hace_un_anio(hasta), None, cache)
+        _, eb_ant = self.ebitdas(fa)
+        v["EBG"] = (eb_aj / eb_ant * 100 - 100) if eb_ant > 0 else None
+        if not f["ING"] and not f["CV"]:
+            # período sin operaciones registradas (por ejemplo, el año anterior al primer ejercicio):
+            # los indicadores que dependen de ventas, costos o resultados no tienen datos
+            for k in ("ROA", "ROE", "CI", "DD", "DINV", "DP", "CC", "RA", "EBC", "EBD", "EBA", "EBK", "EBG"):
+                v[k] = None
+        return v
+
+    def valores_planificados(self, emp, pid, desde, hasta, cc_id=None):
+        """Márgenes calculados con el presupuesto del período."""
+        v = {}
+        if not pid:
+            return v
+        mapa = self.mapa_cuentas(emp)
+        f = dict.fromkeys(["ING", "CV", "OI", "GD", "GA", "OG", "IF", "CF", "IR"], 0)
+        for cid, imp in self._pres_rango(pid, desde, hasta, None, cc_id).items():
+            f[mapa[cid]["seccion_ef"]] += imp
+        bruto, oper, neto = self._resultados(f)
+        if f["ING"]:
+            v["MB"] = bruto / f["ING"] * 100
+            v["MO"] = oper / f["ING"] * 100
+            v["MN"] = neto / f["ING"] * 100
+        return v
+
+    # ----------------------------------------------------------------- metas
+    def metas(self, emp, inicio):
+        """{clave: dict(meta, minimo, maximo)} del ejercicio (metas anuales)."""
+        return {r["clave"]: dict(meta=r["meta"], minimo=r["minimo"], maximo=r["maximo"])
+                for r in self.con.execute("SELECT * FROM indicador_metas WHERE empresa_id=? AND inicio=? "
+                                          "AND mes IS NULL", (emp, inicio))}
+
+    def metas_mes(self, emp, inicio):
+        """{(clave, mes): dict} metas específicas de un mes, si se cargaron."""
+        return {(r["clave"], r["mes"]): dict(meta=r["meta"], minimo=r["minimo"], maximo=r["maximo"])
+                for r in self.con.execute("SELECT * FROM indicador_metas WHERE empresa_id=? AND inicio=? "
+                                          "AND mes IS NOT NULL", (emp, inicio))}
+
+    def guardar_meta(self, emp, inicio, clave, meta=None, minimo=None, maximo=None, mes=None):
+        if clave not in INDICADORES:
+            raise ErrorContable(f"Indicador desconocido: {clave}")
+        if minimo is not None and maximo is not None and minimo > maximo:
+            raise ErrorContable(f"{INDICADORES[clave][0]}: el mínimo no puede ser mayor que el máximo.")
+        with self.con:
+            self.con.execute("DELETE FROM indicador_metas WHERE empresa_id=? AND inicio=? AND clave=? "
+                             "AND IFNULL(mes,0)=?", (emp, inicio, clave, mes or 0))
+            if meta is not None or minimo is not None or maximo is not None:
+                self.con.execute("INSERT INTO indicador_metas(empresa_id,inicio,clave,mes,meta,minimo,maximo) "
+                                 "VALUES (?,?,?,?,?,?,?)", (emp, inicio, clave, mes, meta, minimo, maximo))
+
+    def proponer_metas(self, emp, inicio, ajuste_rango=0.15):
+        """Metas iniciales: el valor de cierre del ejercicio anterior, con un rango de ± 15 %."""
+        ant_ini = _d(inicio).replace(year=_d(inicio).year - 1)
+        ant_fin = _d(inicio) - _dt.timedelta(days=1)
+        v = self.valores_indicadores(emp, ant_ini.isoformat(), ant_fin.isoformat())
+        n = 0
+        for k, valor in v.items():
+            if valor is None:
+                continue
+            m = abs(valor) * ajuste_rango
+            self.guardar_meta(emp, inicio, k, round(valor, 4), round(valor - m, 4), round(valor + m, 4))
+            n += 1
+        return n
+
+    # ---------------------------------------------------------------- series
+    def series_tablero(self, emp, fecha, modo="mensual", cc_id=None, pid=None):
+        """Series de 12 meses del ejercicio que contiene la fecha.
+        Devuelve dict(inicio, etiquetas, corte_mes, ind={clave: dict(real, anterior, plan, meta, minimo, maximo)})."""
+        fecha = parse_fecha(fecha)
+        inicio = self.ejercicio_de(emp, fecha)
+        meses = self.meses_ejercicio(inicio)
+        ant_ini = _d(inicio).replace(year=_d(inicio).year - 1).isoformat()
+        meses_ant = self.meses_ejercicio(ant_ini)
+        corte = _d(fecha)
+        metas, metas_mes = self.metas(emp, inicio), self.metas_mes(emp, inicio)
+        cache = {}
+        out = {k: dict(real=[], anterior=[], plan=[], meta=[], minimo=[], maximo=[]) for k in INDICADORES}
+        etiquetas, corte_mes = [], 0
+        for n, ((a, b), (a2, b2)) in enumerate(zip(meses, meses_ant), 1):
+            etiquetas.append(f"{MESES[a.month - 1]} {a.year % 100:02d}")
+            d_real = (a if modo == "mensual" else meses[0][0])
+            d_ant = (a2 if modo == "mensual" else meses_ant[0][0])
+            real = None
+            if a <= corte:
+                corte_mes = n
+                real = self.valores_indicadores(emp, d_real.isoformat(), min(b, corte).isoformat(), cc_id, cache)
+            ant = self.valores_indicadores(emp, d_ant.isoformat(), b2.isoformat(), cc_id, cache)
+            plan = self.valores_planificados(emp, pid, d_real.isoformat(), b.isoformat(), cc_id) if pid else {}
+            for k in INDICADORES:
+                # por centro de costos las metas de la empresa no aplican: se compara con el presupuesto del centro
+                m = {} if cc_id else (metas_mes.get((k, n)) or metas.get(k) or {})
+                aplica = not cc_id or k in POR_CENTRO
+                out[k]["real"].append(real.get(k) if real and aplica else None)
+                out[k]["anterior"].append(ant.get(k) if aplica else None)
+                p = plan.get(k) if k in DESDE_PRESUPUESTO and plan.get(k) is not None else m.get("meta")
+                out[k]["plan"].append(p if aplica else None)
+                for x in ("meta", "minimo", "maximo"):
+                    out[k][x].append(m.get(x))
+        return dict(inicio=inicio, etiquetas=etiquetas, corte_mes=corte_mes, modo=modo, ind=out)
+
+    def resumen_tablero(self, series, categoria=None):
+        """Valor al último mes con datos de cada indicador, con plan, anterior, desvíos y semáforo."""
+        n = series["corte_mes"] - 1
+        filas = []
+        for k, (nombre, cat, unidad, sentido, formula) in INDICADORES.items():
+            if categoria and cat != categoria:
+                continue
+            s = series["ind"][k]
+            real, plan, ant = (s["real"][n] if n >= 0 else None), s["plan"][max(n, 0)], s["anterior"][max(n, 0)]
+            minimo, maximo = s["minimo"][max(n, 0)], s["maximo"][max(n, 0)]
+
+            def var(a, b):
+                if a is None or b is None:
+                    return None
+                if unidad in ("%", "dias"):
+                    return a - b                     # diferencia en puntos o días
+                return (a - b) / abs(b) * 100 if b else None
+            mejora = None
+            if real is not None and plan is not None:
+                mejora = (real >= plan) if sentido == "mayor" else (real <= plan)
+            filas.append(dict(clave=k, nombre=nombre, categoria=cat, unidad=unidad, sentido=sentido, formula=formula,
+                              real=real, plan=plan, anterior=ant, minimo=minimo, maximo=maximo,
+                              vs_plan=var(real, plan), vs_anterior=var(real, ant), mejor_que_plan=mejora,
+                              estado=estado_indicador(real, minimo, maximo, plan, sentido)))
+        return filas
+
+    # --------------------------------------------------------------- informes
+    @staticmethod
+    def _fmt_var(v, unidad):
+        if v is None:
+            return ""
+        if unidad == "%":
+            return f"{v:+.1f} pp".replace(".", ",")
+        if unidad == "dias":
+            return f"{v:+.0f} días"
+        return f"{v:+.1f} %".replace(".", ",")
+
+    def reporte_tablero(self, emp, fecha, modo="acumulado", categoria=None, cc_id=None, pid=None):
+        s = self.series_tablero(emp, fecha, modo, cc_id, pid)
+        filas = [f for f in self.resumen_tablero(s, categoria) if not cc_id or f["clave"] in POR_CENTRO]
+        n = s["corte_mes"]
+        rep = Reporte("Tablero de indicadores de gestión",
+                      self._subtitulo(emp, f"{'Acumulado del ejercicio' if modo == 'acumulado' else 'Mes'} al "
+                                      f"{fmt_fecha(parse_fecha(fecha))} ({s['etiquetas'][n - 1] if n else ''})"
+                                      + self._filtros_texto(None, cc_id)
+                                      + (f" · Plan: «{self.presupuesto(pid)['nombre']}» y metas" if pid else
+                                         " · Plan: metas")),
+                      [("Indicador", "texto", 32), ("Real", "texto", 13), ("Planificado", "texto", 13),
+                       ("Desvío", "texto", 11), ("Año anterior", "texto", 13), ("Var. vs anterior", "texto", 12),
+                       ("Rango aceptable", "texto", 20), ("Estado", "texto", 9)])
+        cat_act = None
+        for f in filas:
+            if f["categoria"] != cat_act:
+                cat_act = f["categoria"]
+                rep.agregar([cat_act.upper(), "", "", "", "", "", "", ""], "subtitulo")
+            u = f["unidad"]
+            rango = texto_rango(f["minimo"], f["maximo"], u)
+            rep.agregar([f["nombre"], fmt_indicador(f["real"], u), fmt_indicador(f["plan"], u),
+                         self._fmt_var(f["vs_plan"], u), fmt_indicador(f["anterior"], u),
+                         self._fmt_var(f["vs_anterior"], u), rango, f["estado"].capitalize()],
+                        "alerta" if f["estado"] == "rojo" else "normal", 1)
+        rep.notas.append("Planificado: los márgenes se calculan con el presupuesto; el resto de los indicadores usa la "
+                         "meta cargada. El estado compara el valor real con el rango aceptable (líneas base); por "
+                         "centro de costos se compara con el presupuesto del centro (verde: igual o mejor; amarillo: "
+                         "hasta 10 % peor; rojo: más de 10 % peor).")
+        rep.notas.append("Desvío y variación: en porcentajes, diferencia en puntos porcentuales (pp); en días, "
+                         "diferencia en días; en el resto, variación porcentual.")
+        rep.notas.append("ROA, ROE y rotación del activo están anualizados. Días y rotaciones usan saldos promedio. "
+                         "Deudores y proveedores se comparan con ventas y compras con IVA (22 %).")
+        return rep
+
+    def reporte_evolucion_indicador(self, emp, fecha, clave, modo="mensual", cc_id=None, pid=None):
+        s = self.series_tablero(emp, fecha, modo, cc_id, pid)
+        nombre, cat, u, sentido, formula = INDICADORES[clave]
+        x = s["ind"][clave]
+        rep = Reporte(f"{nombre} — evolución {'mensual' if modo == 'mensual' else 'acumulada'}",
+                      self._subtitulo(emp, f"{cat} · {formula} · Ejercicio desde {fmt_fecha(s['inicio'])}"
+                                      + self._filtros_texto(None, cc_id)),
+                      [("Mes", "texto", 10), ("Real", "texto", 13), ("Planificado", "texto", 13),
+                       ("Año anterior", "texto", 13), ("Mínimo", "texto", 12), ("Máximo", "texto", 12),
+                       ("Estado", "texto", 9)])
+        for i, et in enumerate(s["etiquetas"]):
+            r = x["real"][i]
+            rep.agregar([et, fmt_indicador(r, u), fmt_indicador(x["plan"][i], u), fmt_indicador(x["anterior"][i], u),
+                         fmt_indicador(x["minimo"][i], u), fmt_indicador(x["maximo"][i], u),
+                         estado_indicador(r, x["minimo"][i], x["maximo"][i], x["plan"][i], sentido).capitalize()
+                         if r is not None else "—"],
+                        "alerta" if r is not None and estado_indicador(r, x["minimo"][i], x["maximo"][i], x["plan"][i],
+                                                                       sentido) == "rojo" else "normal")
+        return rep
+
+    def exportar_datos_tablero(self, emp, fecha, ruta, cc_id=None, pid=None):
+        """Tabla «larga» (un registro por indicador, mes, vista y serie) para analizar en Excel o Power BI."""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font
+        except ImportError:
+            raise ErrorContable("Para exportar a Excel falta la librería openpyxl (ejecute instalar.bat).")
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Datos"
+        cab = ["Indicador", "Clave", "Categoría", "Unidad", "Vista", "Mes", "Período", "Real", "Año anterior",
+               "Planificado", "Meta", "Mínimo", "Máximo", "Estado"]
+        ws.append(cab)
+        for c in ws[1]:
+            c.font = Font(bold=True)
+        for modo in ("mensual", "acumulado"):
+            s = self.series_tablero(emp, fecha, modo, cc_id, pid)
+            for k, (nombre, cat, u, sentido, _) in INDICADORES.items():
+                x = s["ind"][k]
+                for i, et in enumerate(s["etiquetas"]):
+                    def r(v):
+                        return None if v is None else (round(v / 100, 2) if u == "$" else round(v, 4))
+                    ws.append([nombre, k, cat, u, modo, i + 1, et, r(x["real"][i]), r(x["anterior"][i]),
+                               r(x["plan"][i]), r(x["meta"][i]), r(x["minimo"][i]), r(x["maximo"][i]),
+                               estado_indicador(x["real"][i], x["minimo"][i], x["maximo"][i], x["plan"][i], sentido)
+                               if x["real"][i] is not None else ""])
+        for col, ancho in zip("ABCDEFGHIJKLMN", (32, 6, 14, 7, 10, 5, 9, 14, 14, 14, 12, 12, 12, 9)):
+            ws.column_dimensions[col].width = ancho
+        ws.auto_filter.ref = ws.dimensions
+        ws.freeze_panes = "A2"
+        wi = wb.create_sheet("Indicadores")
+        wi.append(["Clave", "Indicador", "Categoría", "Unidad", "Mejor si es", "Fórmula"])
+        for k, (nombre, cat, u, sentido, formula) in INDICADORES.items():
+            wi.append([k, nombre, cat, u, "mayor" if sentido == "mayor" else "menor", formula])
+        wi.column_dimensions["B"].width = 34
+        wi.column_dimensions["F"].width = 70
+        wb.save(ruta)

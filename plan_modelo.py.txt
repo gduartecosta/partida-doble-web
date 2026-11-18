@@ -1,0 +1,248 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Plan de cuentas modelo, codificado a partir de las cuentas y significados
+del material "Plan de cuentas y clasificaciones" de Gustavo Duarte.
+
+Estructura 1-1-1-1:  1 = Grupo, 11 = Rubro, 111 = Subrubro, 1111 = Cuenta imputable.
+Cada tupla: (código, nombre, sección EEFF o None para heredar, descripción, moneda)
+
+Cambios respecto del material original (para revisar por el docente):
+  * "Resultados del Ejercicio" se separó en 3211 Resultados de ejercicios
+    anteriores y 3212 Resultado del ejercicio (la descripción original
+    correspondía a la primera).
+  * Se agregaron cuentas en dólares (1115, 1125, 2115) para practicar
+    operaciones en moneda extranjera y diferencia de cambio.
+  * Se agregaron: 2211 Préstamos bancarios a largo plazo, 4313 Diferencias de
+    cambio ganadas, 5414 Diferencias de cambio perdidas, 551 Impuesto a la renta
+    y el grupo 6 Cuentas de orden, para que existan todas las secciones de los
+    estados financieros.
+"""
+
+# Secciones de los estados financieros (NIIF para PYMES, secciones 4 y 5)
+SECCIONES = {
+    "AC": "Activo corriente",
+    "ANC": "Activo no corriente",
+    "PC": "Pasivo corriente",
+    "PNC": "Pasivo no corriente",
+    "PAT": "Patrimonio",
+    "ING": "Ingresos de actividades ordinarias",
+    "CV": "Costo de ventas",
+    "OI": "Otros ingresos",
+    "GD": "Gastos de distribución y ventas",
+    "GA": "Gastos de administración",
+    "OG": "Otros gastos",
+    "IF": "Ingresos financieros",
+    "CF": "Costos financieros",
+    "IR": "Impuesto a la renta",
+    "ORD": "Cuentas de orden",
+}
+
+# Sección por defecto según el primer dígito, si ningún rubro la define
+SECCION_POR_GRUPO = {"1": "AC", "2": "PC", "3": "PAT", "4": "ING", "5": "GA", "6": "ORD"}
+
+GRUPOS = {
+    "1": "Activo", "2": "Pasivo", "3": "Patrimonio neto",
+    "4": "Ingresos", "5": "Gastos", "6": "Cuentas de orden",
+}
+
+PLAN = [
+    ("1", "ACTIVO", None, "Bienes y derechos de cobro de la organización", None),
+    ("11", "ACTIVO CORRIENTE", "AC", "Activos que se espera realizar dentro de los 12 meses", None),
+    ("111", "Disponibilidades", None, "Efectivo y equivalentes", None),
+    ("1111", "Caja", None, "Efectivo y cheques de terceros en poder del Cajero", None),
+    ("1112", "Caja en moneda extranjera", None, "Efectivo y cheques de terceros en moneda extranjera en poder del cajero", "USD"),
+    ("1113", "Banco caja de ahorro pesos", None, "Dinero depositado en el banco de la empresa en modalidad caja de ahorros", None),
+    ("1114", "Banco cuenta corriente pesos", None, "Dinero depositado en el banco de la empresa en modalidad cuenta corriente", None),
+    ("1115", "Banco cuenta corriente dólares", None, "Dólares depositados en el banco en cuenta corriente", "USD"),
+    ("112", "Créditos por ventas", None, "Derechos de cobro originados en ventas", None),
+    ("1121", "Deudores por ventas (Clientes)", None, "Derechos por deudas de clientes aún no canceladas por ventas a crédito", None),
+    ("1122", "Cheques diferidos a cobrar", None, "Derechos a cobrar por cheques diferidos aún no vencidos de clientes", None),
+    ("1123", "Conformes a cobrar", None, "Derechos a cobrar por conformes aún no vencidos de clientes", None),
+    ("1124", "Tarjetas de crédito a cobrar", None, "Derechos de cobro contra tarjetas de crédito por ventas", None),
+    ("1125", "Deudores por ventas en dólares", None, "Derechos por ventas a crédito facturadas en dólares", "USD"),
+    ("113", "Otros créditos", None, "Derechos de cobro no originados en ventas", None),
+    ("1131", "Alquileres a cobrar", None, "Derechos de cobro por alquileres ganados que aún no se han cobrado", None),
+    ("1132", "IVA Compras", None, "Impuesto al valor agregado de las compras a proveedores contado o crédito", None),
+    ("114", "Bienes de cambio", None, "Bienes destinados a la venta", None),
+    ("1141", "Mercaderías", None, "Bienes comprados cuyo destino es venderlos en el mismo estado en que se compraron", None),
+    ("12", "ACTIVO NO CORRIENTE", "ANC", "Activos que se espera utilizar por más de 12 meses", None),
+    ("121", "Propiedad, planta y equipo", None, "Bienes de uso de la organización", None),
+    ("1211", "Inmuebles", None, "Bienes inmobiliarios que se usan en la organización", None),
+    ("1212", "Instalaciones", None, "Bienes destinados al uso en la empresa que sirven como soporte a las ventas", None),
+    ("1213", "Maquinarias", None, "Bienes destinados a la transformación de bienes en otros bienes", None),
+    ("1214", "Vehículos", None, "Vehículos destinados al transporte, carga y descarga de bienes de la empresa", None),
+    ("1215", "Muebles y útiles", None, "Bienes destinados al uso de los empleados en la actividad diaria", None),
+    ("1216", "Equipamiento informático", None, "Bienes de tipo informático destinados al uso en la empresa", None),
+    ("122", "Amortizaciones acumuladas", None, "Regularizadora de Propiedad, planta y equipo: saldo acreedor "
+                                               "que se resta del valor de los bienes", None),
+    ("1221", "Amortización acumulada inmuebles", None, "", None),
+    ("1222", "Amortización acumulada instalaciones", None, "", None),
+    ("1223", "Amortización acumulada maquinarias", None, "", None),
+    ("1224", "Amortización acumulada vehículos", None, "", None),
+    ("1225", "Amortización acumulada muebles y útiles", None, "", None),
+    ("1226", "Amortización acumulada equipamiento informático", None, "", None),
+
+    ("2", "PASIVO", None, "Obligaciones a pagar", None),
+    ("21", "PASIVO CORRIENTE", "PC", "Obligaciones que vencen dentro de los 12 meses", None),
+    ("211", "Deudas comerciales", None, "Obligaciones con proveedores", None),
+    ("2111", "Acreedores por compras (Proveedores)", None, "Obligaciones por compras a crédito a proveedores aún no pagadas", None),
+    ("2112", "Cheques diferidos a pagar", None, "Obligaciones a pagar por cheques diferidos aún no vencidos a proveedores", None),
+    ("2113", "Conformes a pagar", None, "Obligaciones a pagar por conformes aún no vencidos a proveedores", None),
+    ("2114", "Tarjetas de crédito a pagar", None, "Obligaciones de pago a tarjetas de crédito por compras", None),
+    ("2115", "Proveedores del exterior (dólares)", None, "Obligaciones por compras a crédito pactadas en dólares", "USD"),
+    ("212", "Deudas financieras", None, "Obligaciones con bancos y entidades financieras", None),
+    ("2121", "Vales bancarios a pagar (Préstamos bancarios)", None, "Obligaciones a pagar por vales bancarios aún no vencidos", None),
+    ("213", "Deudas diversas", None, "Otras obligaciones no comerciales", None),
+    ("2131", "Cuentas a pagar", None, "Obligaciones a pagar en general sin origen comercial", None),
+    ("2132", "Sueldos a pagar", None, "Obligaciones por sueldos a pagar a personal dependiente", None),
+    ("2133", "BPS", None, "Obligaciones a pagar al Banco de Previsión Social por aportes y contribuciones", None),
+    ("2134", "BSE", None, "Obligaciones a pagar al Banco de Seguros por accidentes y enfermedades profesionales", None),
+    ("2135", "Seguros a pagar", None, "Obligaciones a pagar a empresas aseguradoras", None),
+    ("2136", "Alquileres a pagar", None, "Obligaciones de pago por alquileres perdidos que aún no se han pagado", None),
+    ("214", "Deudas fiscales", None, "Obligaciones con organismos recaudadores", None),
+    ("2141", "Impuestos a pagar", None, "Obligaciones a pagar por impuestos en general", None),
+    ("2142", "Impuestos DGI a pagar", None, "Saldo de impuestos a pagar a la DGI", None),
+    ("2143", "Impuestos municipales a pagar", None, "Impuestos a pagar a los municipios", None),
+    ("2144", "IVA Ventas", None, "Impuesto al valor agregado de operaciones con clientes a pagar a la DGI", None),
+    ("22", "PASIVO NO CORRIENTE", "PNC", "Obligaciones que vencen después de los 12 meses", None),
+    ("221", "Deudas financieras a largo plazo", None, "Préstamos con vencimiento mayor a 12 meses", None),
+    ("2211", "Préstamos bancarios a largo plazo", None, "Préstamos bancarios con vencimiento mayor a 12 meses", None),
+
+    ("3", "PATRIMONIO NETO", "PAT", "Es la diferencia entre activos y pasivos", None),
+    ("31", "Aportes de propietarios", None, "Aportes de los dueños", None),
+    ("311", "Capital", None, "Capital aportado", None),
+    ("3111", "Capital", None, "Aporte de bienes, derechos y obligaciones al inicio de la actividad", None),
+    ("32", "Resultados", None, "Resultados generados por la empresa", None),
+    ("321", "Resultados acumulados", None, "Resultados no distribuidos", None),
+    ("3211", "Resultados de ejercicios anteriores", None, "Resultados de ejercicios anteriores aún no distribuidos a propietarios u otros destinos", None),
+    ("3212", "Resultado del ejercicio", None, "Resultado del ejercicio cerrado, trasladado desde las cuentas de ingresos y gastos", None),
+
+    ("4", "GANANCIAS E INGRESOS", None, "Aumentos del patrimonio", None),
+    ("41", "Ingresos operativos", "ING", "Ingresos de actividades ordinarias", None),
+    ("411", "Ventas", None, "Ventas de bienes y servicios", None),
+    ("4111", "Ventas", None, "Aumentos del patrimonio por ventas de bienes o servicios", None),
+    ("4112", "Exportaciones", None, "Aumentos del patrimonio por exportaciones de bienes o servicios", None),
+    ("4113", "Devoluciones sobre ventas", None, "Regularizadora de ventas: notas de crédito por mercadería "
+                                                "devuelta (saldo deudor que se resta de las ventas)", None),
+    ("42", "Otros ingresos", "OI", "Ingresos no vinculados a la actividad principal", None),
+    ("421", "Otros ingresos", None, "", None),
+    ("4211", "Alquileres ganados", None, "Aumentos del patrimonio por alquileres de bienes propiedad de la organización", None),
+    ("43", "Ingresos financieros", "IF", "Resultados financieros positivos", None),
+    ("431", "Ingresos financieros", None, "", None),
+    ("4311", "Intereses ganados", None, "Aumentos del patrimonio por intereses facturados a clientes a crédito", None),
+    ("4312", "Descuentos obtenidos", None, "Aumentos del patrimonio por descuentos obtenidos de proveedores", None),
+    ("4313", "Diferencias de cambio ganadas", None, "Aumentos del patrimonio por variación de la cotización de la moneda extranjera", None),
+
+    ("5", "PÉRDIDAS, COSTOS Y GASTOS", None, "Disminuciones del patrimonio", None),
+    ("51", "Costo de ventas", "CV", "Costo de los bienes y servicios vendidos", None),
+    ("511", "Costo de ventas", None, "", None),
+    ("5111", "Costo de ventas", None, "Costo de las ventas realizadas. Es lo que costó vender", None),
+    ("52", "Gastos de administración", "GA", "Gastos de la estructura administrativa", None),
+    ("521", "Gastos de personal", None, "", None),
+    ("5211", "Sueldos", None, "Gastos por remuneraciones a personal dependiente", None),
+    ("5212", "Leyes sociales", None, "Gastos relacionados a remuneraciones a pagar a organismos de seguridad social", None),
+    ("5213", "Honorarios", None, "Gastos por remuneraciones de profesionales", None),
+    ("522", "Gastos de funcionamiento", None, "", None),
+    ("5221", "Gastos de papelería", None, "Gastos relacionados con bienes utilizados en actividad administrativa", None),
+    ("5222", "Gastos de limpieza", None, "Gastos relacionados con artículos de limpieza", None),
+    ("5223", "Gastos de mantenimiento", None, "Gastos de mantenimiento del local o maquinarias", None),
+    ("5224", "Gastos generales", None, "Gastos sin discriminación, no específicos", None),
+    ("5225", "Alquileres perdidos", None, "Gastos por alquileres contratados con terceros", None),
+    ("523", "Servicios públicos", None, "", None),
+    ("5231", "UTE", None, "Gastos de electricidad", None),
+    ("5232", "OSE", None, "Gastos de suministro de agua", None),
+    ("5233", "Antel", None, "Gastos por servicios de telecomunicaciones", None),
+    ("524", "Impuestos y tasas", None, "", None),
+    ("5241", "Impuestos municipales", None, "Gastos por impuestos relacionados con autoridades municipales", None),
+    ("5242", "Impuestos", None, "Gastos por impuestos relacionados con el gobierno nacional", None),
+    ("525", "Amortizaciones", None, "Pérdida de valor de los bienes de uso por el paso del tiempo", None),
+    ("5251", "Amortización de bienes de uso", None, "Cuota del período de la amortización de Propiedad, planta y "
+                                                    "equipo", None),
+    ("53", "Gastos de ventas", "GD", "Gastos de comercialización y distribución", None),
+    ("531", "Gastos de comercialización", None, "", None),
+    ("5311", "Gastos de propaganda", None, "Gastos por publicidad contratada", None),
+    ("5312", "Gastos de locomoción", None, "Gastos por transporte y traslados", None),
+    ("5313", "Combustibles", None, "Gastos por combustibles utilizados por el transporte de la empresa", None),
+    ("532", "Gastos de personal de ventas y logística", None, "", None),
+    ("5321", "Sueldos de ventas y logística", None, "Remuneraciones del personal de ventas y de distribución", None),
+    ("5322", "Leyes sociales de ventas y logística", None, "Aportes patronales del personal de ventas y "
+                                                          "distribución", None),
+    ("54", "Costos financieros", "CF", "Resultados financieros negativos", None),
+    ("541", "Costos financieros", None, "", None),
+    ("5411", "Intereses perdidos", None, "Gastos por intereses generados por operaciones de financiación bancaria", None),
+    ("5412", "Gastos bancarios", None, "Gastos relacionados con actividades bancarias", None),
+    ("5413", "Descuentos concedidos", None, "Descuentos concedidos u otorgados a clientes al contado o crédito", None),
+    ("5414", "Diferencias de cambio perdidas", None, "Disminuciones del patrimonio por variación de la cotización de la moneda extranjera", None),
+    ("55", "Impuesto a la renta", "IR", "Impuesto sobre el resultado del ejercicio", None),
+    ("551", "Impuesto a la renta", None, "", None),
+    ("5511", "IRAE", None, "Impuesto a las Rentas de las Actividades Económicas del ejercicio", None),
+
+    ("6", "CUENTAS DE ORDEN", "ORD", "Registran hechos que no modifican el patrimonio pero conviene controlar", None),
+    ("61", "Cuentas de orden deudoras", None, "", None),
+    ("611", "Cuentas de orden deudoras", None, "", None),
+    ("6111", "Valores recibidos en garantía", None, "Documentos o bienes de terceros recibidos en garantía", None),
+    ("6112", "Mercaderías recibidas en consignación", None, "Mercaderías de terceros en poder de la empresa para su venta", None),
+    ("62", "Cuentas de orden acreedoras", None, "", None),
+    ("621", "Cuentas de orden acreedoras", None, "", None),
+    ("6211", "Depositantes de valores en garantía", None, "Contrapartida de los valores recibidos en garantía", None),
+    ("6212", "Comitentes por mercaderías en consignación", None, "Contrapartida de las mercaderías recibidas en consignación", None),
+]
+
+LIBROS_MODELO = [
+    ("DG", "Diario general", "DIARIO"),
+    ("CAJ", "Libro auxiliar de Caja", "AUXILIAR"),
+    ("BCO", "Libro auxiliar de Bancos", "AUXILIAR"),
+    ("VEN", "Libro auxiliar de Ventas", "AUXILIAR"),
+    ("COM", "Libro auxiliar de Compras", "AUXILIAR"),
+]
+
+# Cuentas colectivas que exigen auxiliar: C = clientes, P = proveedores
+# Cuentas regularizadoras: su saldo normal es el contrario al de su grupo
+NATURALEZA_ESPECIAL = {c: "A" for c in ("122", "1221", "1222", "1223", "1224", "1225", "1226")}
+NATURALEZA_ESPECIAL["4113"] = "D"
+
+AUXILIARES = {
+    "1121": "C", "1122": "C", "1123": "C", "1125": "C",
+    "2111": "P", "2112": "P", "2113": "P", "2115": "P",
+}
+
+# Esqueleto para una empresa nueva «desde cero» (7.6): solo cuentas de título, ninguna de movimiento.
+# Nombres y secciones del plan NIIF para PYMES de la 7.5 (planes/plan_niif_pymes_comercial.csv).
+# Estructura recomendada: 1-1-1-2 (grupo, rubro, subrubro y cuenta de 2 dígitos, hasta 99 por subrubro).
+# Cada tupla: (código, nombre, saldo normal, sección EEFF o None para heredar, descripción)
+ESTRUCTURA_ESQUELETO = "1-1-1-2"
+ESQUELETO_NIIF = [
+    ("1", "ACTIVO", "D", None, "Recursos controlados por la entidad de los que espera obtener beneficios"),
+    ("11", "Activo corriente", "D", "AC", "Activos que se espera realizar dentro de los 12 meses"),
+    ("12", "Activo no corriente", "D", "ANC", "Activos que se espera usar o realizar después de los 12 meses"),
+    ("2", "PASIVO", "A", None, "Obligaciones presentes de la entidad"),
+    ("21", "Pasivo corriente", "A", "PC", "Obligaciones que vencen dentro de los 12 meses"),
+    ("22", "Pasivo no corriente", "A", "PNC", "Obligaciones que vencen después de los 12 meses"),
+    ("3", "PATRIMONIO", "A", None, "Activo menos pasivo"),
+    ("31", "Aportes de propietarios", "A", "PAT", "Capital y otros aportes de los dueños"),
+    ("32", "Ajustes al patrimonio", "A", "PAT", "Revaluaciones y otros ajustes que no pasan por resultados"),
+    ("33", "Ganancias retenidas", "A", "PAT", "Reservas y resultados acumulados no distribuidos"),
+    ("4", "INGRESOS", "A", None, "Aumentos del patrimonio que no son aportes de los dueños"),
+    ("41", "Ingresos de actividades ordinarias", "A", "ING", "Ventas de bienes y servicios"),
+    ("42", "Otros ingresos", "A", "OI", "Ingresos ajenos a la actividad principal"),
+    ("43", "Ingresos financieros", "A", "IF", "Intereses, descuentos obtenidos y diferencias de cambio ganadas"),
+    ("5", "COSTOS Y GASTOS", "D", None, "Disminuciones del patrimonio que no son retiros de los dueños"),
+    ("51", "Costo de ventas", "D", "CV", "Costo de los bienes y servicios vendidos"),
+    ("52", "Gastos de distribución y ventas", "D", "GD", "Gastos de comercialización y entrega"),
+    ("53", "Gastos de administración", "D", "GA", "Gastos de la estructura administrativa"),
+    ("54", "Otros gastos", "D", "OG", "Gastos ajenos a la actividad principal"),
+    ("55", "Gastos financieros", "D", "CF", "Intereses, gastos bancarios y diferencias de cambio perdidas"),
+    ("56", "Impuesto a la renta", "D", "IR", "Impuesto sobre el resultado del ejercicio"),
+]

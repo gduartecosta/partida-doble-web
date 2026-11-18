@@ -1,0 +1,1681 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Reglas contables del sistema: altas, bajas y modificaciones, validación de la
+partida doble e informes (diario, mayor, balance de comprobación y estados
+financieros según NIIF para PYMES).
+
+Este módulo no sabe nada de la interfaz: toda la lógica puede probarse sola.
+"""
+import re
+
+from . import ain
+from . import cotizaciones_bcu as bcu
+from . import plan_modelo as pm
+from .base import *  # noqa: F401,F403  (utilidades y constantes compartidas)
+from .base import _f  # noqa: F401
+from .analisis import AnalisisMixin, FlujosMixin
+from .cierre import TIPOS_CIERRE, CierreMixin
+from .indices import IndicesMixin
+from .lotes import LotesMixin
+from .modelos import ModelosMixin
+from .planes import PlanMixin
+from .presupuestos import PresupuestosMixin
+from .presupuestos_planilla import PresupuestosPlanillaMixin
+from .tablero import TableroMixin
+from .terceros import AuxiliaresMixin
+
+
+MANTENER = object()   # en modificar_cuenta: conservar el valor actual
+PLANES_INICIALES = ("modelo", "esqueleto", "vacio")
+# lo que se puede copiar al crear una empresa a partir de otra (nunca asientos ni presupuestos)
+COPIABLES = {"plan": "Plan de cuentas", "libros": "Libros", "locales": "Locales y centros de costos",
+             "monedas": "Monedas", "modelos": "Modelos de asiento", "terceros": "Clientes y proveedores",
+             "rubros_tablero": "Rubros del tablero"}
+
+
+class Contabilidad(AuxiliaresMixin, PresupuestosMixin, LotesMixin, TableroMixin, ModelosMixin, PlanMixin,
+                   CierreMixin, IndicesMixin, PresupuestosPlanillaMixin, AnalisisMixin,
+                   FlujosMixin):
+    def __init__(self, con):
+        self.con = con
+        self._cifras = None          # texto de cifras de una vista convertida o reexpresada (para_informes)
+
+    # ------------------------------------------------------------ empresas
+    def empresas(self):
+        return self.con.execute("SELECT * FROM empresas ORDER BY codigo").fetchall()
+
+    def empresa(self, emp_id):
+        return self.con.execute("SELECT * FROM empresas WHERE id=?", (emp_id,)).fetchone()
+
+    @staticmethod
+    def _validar_estructura(estructura):
+        partes = [p.strip() for p in (estructura or "").split("-")]
+        if not partes or not all(p.isdigit() and 1 <= int(p) <= 4 for p in partes):
+            raise ErrorContable("La estructura de niveles debe ser como 1-1-1-1 o 1-1-2-3 "
+                                "(dígitos que agrega cada nivel, entre 1 y 4).")
+        if int(partes[0]) != 1:
+            raise ErrorContable("El primer nivel debe tener 1 dígito (1=Activo ... 6=Cuentas de orden).")
+        if len(partes) < 2:
+            raise ErrorContable("El plan necesita al menos 2 niveles.")
+        return "-".join(partes)
+
+    def _datos_empresa(self, codigo, nombre, estructura, inicio, cierre):
+        codigo = (codigo or "").strip().upper()
+        if not re.fullmatch(r"[A-Z0-9_\-]{1,15}", codigo):
+            raise ErrorContable("El código de empresa debe tener entre 1 y 15 letras o números, sin espacios.")
+        if not (nombre or "").strip():
+            raise ErrorContable("Falta el nombre de la empresa.")
+        estructura = self._validar_estructura(estructura)
+        inicio = parse_fecha(inicio) if inicio else None
+        cierre = parse_fecha(cierre) if cierre else None
+        if inicio and cierre and cierre <= inicio:
+            raise ErrorContable("El cierre del ejercicio debe ser posterior al inicio.")
+        return codigo, nombre.strip(), estructura, inicio, cierre
+
+    @staticmethod
+    def _cierre_calculado(inicio, cierre, ficha, meses_actuales=None):
+        """El cierre se calcula a partir del inicio y de los meses cubiertos (12 si no se indican),
+        salvo que se pase explícitamente (compatibilidad con la 7.5)."""
+        if cierre or not inicio:
+            return cierre
+        meses = (ficha or {}).get("meses_cubiertos") or meses_actuales or 12
+        return ain.cierre_desde_inicio(inicio, ain._entero(meses, "Meses cubiertos", 1, 12))
+
+    def crear_empresa(self, codigo, nombre, rut="", estructura="1-1-1-1",
+                      inicio=None, cierre=None, cargar_modelo=True, forzar_rut=False,
+                      plan=None, ficha=None, requiere_inicio=False):
+        """Crea la empresa con un local, sus libros (siempre el Diario general) y el plan inicial:
+        plan='modelo' (plan del programa, 1-1-1-1), 'esqueleto' (solo títulos NIIF) o 'vacio'.
+        Sin 'plan' se respeta 'cargar_modelo' como en la 7.5. 'ficha': campos del formulario de la AIN.
+        Obligatorios: código, nombre y, si requiere_inicio (pantalla), inicio del ejercicio."""
+        plan = plan or ("modelo" if cargar_modelo else "vacio")
+        if plan not in PLANES_INICIALES:
+            raise ErrorContable(f"Plan inicial desconocido: {plan}.")
+        if requiere_inicio and not (inicio or "").strip():
+            raise ErrorContable("Falta el inicio del ejercicio (dato obligatorio).")
+        rut = validar_documento("RUT", rut, forzar_rut) or ""
+        cierre = self._cierre_calculado(inicio, cierre, ficha)
+        codigo, nombre, estructura, inicio, cierre = self._datos_empresa(
+            codigo, nombre, estructura, inicio, cierre)
+        if plan == "esqueleto" and not estructura.startswith("1-1"):
+            raise ErrorContable("El esqueleto usa códigos de 1 y 2 dígitos (1, 11, 12...): la estructura debe "
+                                "empezar con 1-1 (se recomienda 1-1-1-2).")
+        if self.con.execute("SELECT 1 FROM empresas WHERE codigo=?", (codigo,)).fetchone():
+            raise ErrorContable(f"Ya existe una empresa con el código {codigo}.")
+        datos_ficha = self._validar_ficha(None, ficha, cierre) if ficha else None
+        with self.con:
+            cur = self.con.execute(
+                "INSERT INTO empresas(codigo,nombre,rut,estructura,inicio_ejercicio,cierre_ejercicio)"
+                " VALUES (?,?,?,?,?,?)", (codigo, nombre, rut, estructura, inicio, cierre))
+            emp = cur.lastrowid
+            self.con.execute("INSERT INTO locales(empresa_id,codigo,nombre) VALUES (?,?,?)",
+                             (emp, "1", "Casa central"))
+            for c, n, t in pm.LIBROS_MODELO:
+                self.con.execute("INSERT INTO libros(empresa_id,codigo,nombre,tipo) VALUES (?,?,?,?)",
+                                 (emp, c, n, t))
+            if datos_ficha:
+                self._grabar_ficha(emp, datos_ficha)
+        if plan == "esqueleto":
+            self.cargar_esqueleto(emp)
+        elif plan == "modelo":
+            if estructura != "1-1-1-1":
+                raise ErrorContable("La empresa se creó, pero el plan modelo usa la estructura 1-1-1-1; "
+                                    "cargue el plan de cuentas manualmente.")
+            self.cargar_plan_modelo(emp)
+        return emp
+
+    def cargar_esqueleto(self, emp):
+        """Grupos 1 a 5 y rubros de nivel 2 de la NIIF para PYMES, todos de título (sin movimiento)."""
+        for codigo, nombre, naturaleza, seccion, desc in pm.ESQUELETO_NIIF:
+            if not self.cuenta_por_codigo(emp, codigo):
+                self.crear_cuenta(emp, codigo, nombre, False, naturaleza=naturaleza, seccion=seccion,
+                                  descripcion=desc)
+
+    def modificar_empresa(self, emp_id, codigo, nombre, rut="", estructura="1-1-1-1",
+                          inicio=None, cierre=None, forzar_rut=False, ficha=None, requiere_inicio=False):
+        if requiere_inicio and not (inicio or "").strip():
+            raise ErrorContable("Falta el inicio del ejercicio (dato obligatorio).")
+        rut = validar_documento("RUT", rut, forzar_rut) or ""
+        previa = self.empresa(emp_id)
+        cierre = self._cierre_calculado(inicio, cierre, ficha,
+                                        previa["meses_cubiertos"] or ain.meses_entre(previa["inicio_ejercicio"],
+                                                                                      previa["cierre_ejercicio"]))
+        codigo, nombre, estructura, inicio, cierre = self._datos_empresa(
+            codigo, nombre, estructura, inicio, cierre)
+        datos_ficha = self._validar_ficha(emp_id, ficha, cierre) if ficha else None
+        actual = self.empresa(emp_id)
+        otro = self.con.execute("SELECT id FROM empresas WHERE codigo=? AND id<>?",
+                                (codigo, emp_id)).fetchone()
+        if otro:
+            raise ErrorContable(f"Ya existe otra empresa con el código {codigo}.")
+        if estructura != actual["estructura"] and self.con.execute(
+                "SELECT 1 FROM cuentas WHERE empresa_id=?", (emp_id,)).fetchone():
+            raise ErrorContable("No se puede cambiar la estructura de niveles porque la empresa "
+                                "ya tiene cuentas cargadas.")
+        with self.con:
+            self.con.execute("UPDATE empresas SET codigo=?,nombre=?,rut=?,estructura=?,"
+                             "inicio_ejercicio=?,cierre_ejercicio=? WHERE id=?",
+                             (codigo, nombre, rut, estructura, inicio, cierre, emp_id))
+            if datos_ficha:
+                self._grabar_ficha(emp_id, datos_ficha)
+
+    # ------------------------------------------------------- ficha (AIN)
+    def ficha(self, emp):
+        """Datos de la ficha de la empresa, con los que se calculan (meses, año y mes de cierre)."""
+        e = dict(self.empresa(emp))
+        e["meses_cubiertos"] = e.get("meses_cubiertos") or ain.meses_entre(e["inicio_ejercicio"],
+                                                                           e["cierre_ejercicio"])
+        e["anio_cierre"], e["mes_cierre"] = ain.anio_mes_cierre(e["cierre_ejercicio"])
+        e["moneda_funcional"] = e["moneda_nacional"]
+        e["moneda_presentacion"] = e.get("moneda_presentacion") or e["moneda_nacional"]
+        e["redondeo"] = e.get("redondeo") or ain.REDONDEOS[0]
+        return e
+
+    def _empresa_con_importes(self, emp):
+        """Motivo por el que ya no se puede cambiar la moneda funcional, o None."""
+        for sql, que in (("SELECT 1 FROM asientos WHERE empresa_id=?", "asientos"),
+                         ("SELECT 1 FROM lote_asientos la JOIN lotes l ON l.id=la.lote_id WHERE l.empresa_id=?",
+                          "asientos en lotes"),
+                         ("SELECT 1 FROM presupuesto_items i JOIN presupuestos p ON p.id=i.presupuesto_id "
+                          "WHERE p.empresa_id=?", "presupuestos"),
+                         ("SELECT 1 FROM modelo_lineas l JOIN modelos_asiento m ON m.id=l.modelo_id "
+                          "WHERE m.empresa_id=?", "modelos de asiento")):
+            if self.con.execute(sql + " LIMIT 1", (emp,)).fetchone():
+                return que
+        return None
+
+    def _alta_moneda_ain(self, codigo):
+        if codigo and not self.moneda(codigo):
+            nombre, simbolo, _ = ain.MONEDAS_ALTA[codigo]
+            self.con.execute("INSERT INTO monedas(codigo,nombre,simbolo) VALUES (?,?,?)", (codigo, nombre, simbolo))
+
+    def _validar_ficha(self, emp, ficha, cierre):
+        datos = ain.validar_ficha(ficha, cierre)
+        funcional = (ficha.get("moneda_nacional") or ficha.get("moneda_funcional") or "").upper()[:3] or None
+        codigos = [c for c, _ in ain.MONEDAS_AIN]
+        if funcional and funcional not in codigos:
+            raise ErrorContable(f"Moneda funcional: el formulario de la AIN admite {', '.join(codigos)}.")
+        if emp and funcional and funcional != self.empresa(emp)["moneda_nacional"]:
+            motivo = self._empresa_con_importes(emp)
+            if motivo:
+                raise ErrorContable(f"No se puede cambiar la moneda funcional: la empresa ya tiene {motivo}, "
+                                    "registrados en la moneda funcional actual.")
+            r = self.con.execute("SELECT codigo FROM cuentas WHERE empresa_id=? AND moneda=? LIMIT 1",
+                                 (emp, funcional)).fetchone()
+            if r:
+                raise ErrorContable(f"No se puede usar {funcional} como moneda funcional: la cuenta {r[0]} se lleva "
+                                    f"en {funcional} como moneda extranjera. Quite la moneda de esa cuenta primero.")
+        datos["moneda_nacional"] = funcional
+        return datos
+
+    def _grabar_ficha(self, emp, datos):
+        for m in (datos.get("moneda_nacional"), datos.get("moneda_presentacion")):
+            self._alta_moneda_ain(m)
+        cols = [c for c in ain.CAMPOS_FICHA] + (["moneda_nacional"] if datos.get("moneda_nacional") else [])
+        self.con.execute(f"UPDATE empresas SET {', '.join(c + '=?' for c in cols)} WHERE id=?",
+                         [datos.get(c) for c in cols] + [emp])
+
+    def guardar_ficha(self, emp, ficha):
+        """Graba solo los campos de la ficha (todos opcionales)."""
+        datos = self._validar_ficha(emp, ficha, self.empresa(emp)["cierre_ejercicio"])
+        with self.con:
+            self._grabar_ficha(emp, datos)
+
+    # ---------------------------------------------- empresa a partir de otra
+    def crear_empresa_desde(self, origen, codigo, nombre, inicio, copiar, rut="", ficha=None, forzar_rut=False):
+        """Crea una empresa copiando de otra lo elegido en 'copiar' (claves de COPIABLES). Nunca se copian
+        asientos, lotes ni presupuestos. Devuelve (empresa, notas)."""
+        copiar = set(copiar or ())
+        desconocidas = copiar - set(COPIABLES)
+        if desconocidas:
+            raise ErrorContable(f"No se puede copiar: {', '.join(sorted(desconocidas))}.")
+        for dep in ("modelos", "rubros_tablero"):
+            if dep in copiar and "plan" not in copiar:
+                raise ErrorContable(f"Para copiar «{COPIABLES[dep]}» hay que copiar también el plan de cuentas: "
+                                    "se refieren a sus cuentas.")
+        o = self.empresa(origen)
+        if not o:
+            raise ErrorContable("La empresa de origen no existe.")
+        notas = []
+        emp = self.crear_empresa(codigo, nombre, rut, o["estructura"], inicio, None, plan="vacio", ficha=ficha,
+                                 forzar_rut=forzar_rut, requiere_inicio=True)
+        try:
+            with self.con:
+                mapa = self._copiar_dimensiones(origen, emp, copiar)
+                if "plan" in copiar:
+                    mapa["cuentas"] = self._copiar_plan(origen, emp, mapa)
+                if "terceros" in copiar:
+                    mapa["terceros"] = self._copiar_terceros(origen, emp)
+                if "modelos" in copiar:
+                    self._copiar_modelos(origen, emp, mapa)
+                if "rubros_tablero" in copiar:
+                    r = self.con.execute("SELECT valor FROM meta WHERE clave=?", (f"rubros_tablero:{origen}",)).fetchone()
+                    if r:
+                        self.con.execute("INSERT OR REPLACE INTO meta(clave, valor) VALUES (?, ?)",
+                                         (f"rubros_tablero:{emp}", r[0]))
+        except Exception:
+            self.eliminar_empresa(emp)
+            raise
+        if "monedas" in copiar:
+            notas.append("Las monedas y sus cotizaciones son comunes a todas las empresas de la base: "
+                         "la empresa nueva ya las tiene.")
+        notas.append("No se copiaron asientos, lotes ni presupuestos.")
+        return emp, notas
+
+    def _copiar_dimensiones(self, origen, emp, copiar):
+        mapa = {"libros": {}, "locales": {}, "centros": {}}
+        if "libros" in copiar:
+            self.con.execute("DELETE FROM libros WHERE empresa_id=? AND codigo<>'DG'", (emp,))
+            for l in self.libros(origen):
+                if l["codigo"] == "DG":
+                    self.con.execute("UPDATE libros SET nombre=? WHERE empresa_id=? AND codigo='DG'", (l["nombre"], emp))
+                else:
+                    self.con.execute("INSERT INTO libros(empresa_id,codigo,nombre,tipo) VALUES (?,?,?,?)",
+                                     (emp, l["codigo"], l["nombre"], l["tipo"]))
+        nuevos = {l["codigo"]: l["id"] for l in self.libros(emp)}
+        mapa["libros"] = {l["id"]: nuevos.get(l["codigo"]) for l in self.libros(origen)}
+        if "locales" in copiar:
+            self.con.execute("DELETE FROM locales WHERE empresa_id=?", (emp,))
+            for tabla, clave in (("locales", "locales"), ("centros_costo", "centros")):
+                for x in self.con.execute(f"SELECT * FROM {tabla} WHERE empresa_id=? ORDER BY codigo",
+                                          (origen,)).fetchall():
+                    mapa[clave][x["id"]] = self.con.execute(
+                        f"INSERT INTO {tabla}(empresa_id,codigo,nombre,activo) VALUES (?,?,?,?)",
+                        (emp, x["codigo"], x["nombre"], x["activo"])).lastrowid
+        return mapa
+
+    def _copiar_plan(self, origen, emp, mapa):
+        ids = {}
+        for c in self.cuentas(origen):                 # ordenadas por código: el rubro superior va antes
+            ids[c["id"]] = self.con.execute(
+                "INSERT INTO cuentas(empresa_id,codigo,nombre,nivel,padre_id,imputable,naturaleza,seccion,moneda,"
+                "local_id,cc_id,descripcion,auxiliar) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (emp, c["codigo"], c["nombre"], c["nivel"], ids.get(c["padre_id"]), c["imputable"], c["naturaleza"],
+                 c["seccion"], c["moneda"], mapa["locales"].get(c["local_id"]), mapa["centros"].get(c["cc_id"]),
+                 c["descripcion"], c["auxiliar"])).lastrowid
+        o = self.empresa(origen)
+        self.con.execute("UPDATE empresas SET cta_dif_ganada=?, cta_dif_perdida=? WHERE id=?",
+                         (ids.get(o["cta_dif_ganada"]), ids.get(o["cta_dif_perdida"]), emp))
+        return ids
+
+    def _copiar_terceros(self, origen, emp):
+        cols = [r[1] for r in self.con.execute("PRAGMA table_info(terceros)") if r[1] not in ("id", "empresa_id")]
+        ids = {}
+        for t in self.con.execute("SELECT * FROM terceros WHERE empresa_id=? ORDER BY codigo", (origen,)).fetchall():
+            ids[t["id"]] = self.con.execute(
+                f"INSERT INTO terceros(empresa_id,{','.join(cols)}) VALUES (?{',?' * len(cols)})",
+                [emp] + [t[c] for c in cols]).lastrowid
+        return ids
+
+    def _copiar_modelos(self, origen, emp, mapa):
+        cuentas, terceros = mapa["cuentas"], mapa.get("terceros", {})
+        cols_m = [r[1] for r in self.con.execute("PRAGMA table_info(modelos_asiento)")
+                  if r[1] not in ("id", "empresa_id", "libro_id", "local_id")]
+        cols_l = [r[1] for r in self.con.execute("PRAGMA table_info(modelo_lineas)")
+                  if r[1] not in ("id", "modelo_id", "cuenta_id", "local_id", "cc_id", "tercero_id")]
+        for m in self.con.execute("SELECT * FROM modelos_asiento WHERE empresa_id=?", (origen,)).fetchall():
+            nuevo = self.con.execute(
+                f"INSERT INTO modelos_asiento(empresa_id,libro_id,local_id,{','.join(cols_m)}) "
+                f"VALUES (?,?,?{',?' * len(cols_m)})",
+                [emp, mapa["libros"].get(m["libro_id"]), mapa["locales"].get(m["local_id"])]
+                + [m[c] for c in cols_m]).lastrowid
+            for l in self.con.execute("SELECT * FROM modelo_lineas WHERE modelo_id=?", (m["id"],)).fetchall():
+                self.con.execute(
+                    f"INSERT INTO modelo_lineas(modelo_id,cuenta_id,local_id,cc_id,tercero_id,{','.join(cols_l)}) "
+                    f"VALUES (?,?,?,?,?{',?' * len(cols_l)})",
+                    [nuevo, cuentas[l["cuenta_id"]], mapa["locales"].get(l["local_id"]),
+                     mapa["centros"].get(l["cc_id"]), terceros.get(l["tercero_id"])] + [l[c] for c in cols_l])
+
+    def eliminar_empresa(self, emp_id):
+        if self.con.execute("SELECT 1 FROM asientos WHERE empresa_id=?", (emp_id,)).fetchone():
+            raise ErrorContable("No se puede dar de baja: la empresa tiene asientos registrados.")
+        with self.con:
+            self.con.execute("DELETE FROM presupuesto_items WHERE presupuesto_id IN "
+                             "(SELECT id FROM presupuestos WHERE empresa_id=?)", (emp_id,))
+            self.con.execute("DELETE FROM presupuestos WHERE empresa_id=?", (emp_id,))
+            self.con.execute("DELETE FROM lote_asientos WHERE lote_id IN (SELECT id FROM lotes WHERE empresa_id=?)",
+                             (emp_id,))
+            self.con.execute("DELETE FROM importaciones WHERE empresa_id=?", (emp_id,))
+            self.con.execute("DELETE FROM lotes WHERE empresa_id=?", (emp_id,))
+            self.con.execute("DELETE FROM indicador_metas WHERE empresa_id=?", (emp_id,))
+            self.con.execute("DELETE FROM modelo_lineas WHERE modelo_id IN "
+                             "(SELECT id FROM modelos_asiento WHERE empresa_id=?)", (emp_id,))
+            self.con.execute("DELETE FROM modelos_asiento WHERE empresa_id=?", (emp_id,))
+            self.con.execute("DELETE FROM reclasificacion_movs WHERE reclasificacion_id IN "
+                             "(SELECT id FROM reclasificaciones WHERE empresa_id=?)", (emp_id,))
+            self.con.execute("DELETE FROM reclasificaciones WHERE empresa_id=?", (emp_id,))
+            self.con.execute("DELETE FROM cuentas WHERE empresa_id=?", (emp_id,))
+            self.con.execute("DELETE FROM empresas WHERE id=?", (emp_id,))
+
+    # ------------------------------------------------ monedas y cotizaciones
+    def monedas(self, solo_activas=False):
+        sql = "SELECT * FROM monedas" + (" WHERE activa=1" if solo_activas else "") + " ORDER BY codigo"
+        return self.con.execute(sql).fetchall()
+
+    def moneda(self, codigo):
+        return self.con.execute("SELECT * FROM monedas WHERE codigo=?", (codigo,)).fetchone()
+
+    def moneda_en_uso(self, codigo):
+        for sql in ("SELECT 1 FROM cuentas WHERE moneda=?", "SELECT 1 FROM movimientos WHERE moneda=?",
+                    "SELECT 1 FROM empresas WHERE moneda_nacional=?"):
+            if self.con.execute(sql + " LIMIT 1", (codigo,)).fetchone():
+                return True
+        return False
+
+    def guardar_moneda(self, codigo, nombre, simbolo, decimales=2, activa=True, codigo_anterior=None):
+        codigo = (codigo or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", codigo):
+            raise ErrorContable("El código de moneda son 3 letras (norma ISO 4217): UYU, USD, EUR, BRL, ARS...")
+        if not (nombre or "").strip():
+            raise ErrorContable("Falta el nombre de la moneda.")
+        simbolo = (simbolo or "").strip() or codigo
+        if codigo_anterior and codigo_anterior != codigo:
+            if self.moneda_en_uso(codigo_anterior):
+                raise ErrorContable("No se puede cambiar el código: la moneda está en uso en cuentas o asientos.")
+        if (not codigo_anterior or codigo_anterior != codigo) and self.moneda(codigo):
+            raise ErrorContable(f"Ya existe la moneda {codigo}.")
+        if codigo_anterior and not activa and self.con.execute(
+                "SELECT 1 FROM empresas WHERE moneda_nacional=?", (codigo_anterior,)).fetchone():
+            raise ErrorContable("La moneda nacional no puede desactivarse.")
+        with self.con:
+            if codigo_anterior:
+                self.con.execute("UPDATE monedas SET codigo=?,nombre=?,simbolo=?,decimales=?,activa=? "
+                                 "WHERE codigo=?", (codigo, nombre.strip(), simbolo, int(decimales),
+                                                    int(bool(activa)), codigo_anterior))
+            else:
+                self.con.execute("INSERT INTO monedas(codigo,nombre,simbolo,decimales,activa) VALUES (?,?,?,?,?)",
+                                 (codigo, nombre.strip(), simbolo, int(decimales), int(bool(activa))))
+
+    def eliminar_moneda(self, codigo):
+        if self.moneda_en_uso(codigo):
+            raise ErrorContable("No se puede dar de baja: la moneda está asignada a cuentas, usada en asientos "
+                                "o es la moneda nacional de una empresa. Puede desactivarla.")
+        with self.con:
+            self.con.execute("DELETE FROM cotizaciones WHERE moneda=?", (codigo,))
+            self.con.execute("DELETE FROM monedas WHERE codigo=?", (codigo,))
+
+    def cotizaciones(self, moneda, desde=None, hasta=None):
+        sql, par = "SELECT * FROM cotizaciones WHERE moneda=?", [moneda]
+        if desde:
+            sql += " AND fecha>=?"
+            par.append(parse_fecha(desde))
+        if hasta:
+            sql += " AND fecha<=?"
+            par.append(parse_fecha(hasta))
+        return self.con.execute(sql + " ORDER BY fecha DESC", par).fetchall()
+
+    def guardar_cotizacion(self, moneda, fecha, tipo_cambio, fuente="manual", detalle=None):
+        if not self.moneda(moneda):
+            raise ErrorContable(f"La moneda {moneda} no existe.")
+        fecha = parse_fecha(fecha)
+        tc = tipo_cambio if isinstance(tipo_cambio, float) else parse_tc(tipo_cambio)
+        with self.con:
+            self.con.execute("INSERT OR REPLACE INTO cotizaciones(moneda,fecha,tipo_cambio,fuente,detalle) "
+                             "VALUES (?,?,?,?,?)", (moneda, fecha, tc, fuente, detalle))
+
+    def eliminar_cotizacion(self, moneda, fecha):
+        with self.con:
+            self.con.execute("DELETE FROM cotizaciones WHERE moneda=? AND fecha=?", (moneda, parse_fecha(fecha)))
+
+    def cotizacion(self, moneda, fecha):
+        """Último tipo de cambio cargado a esa fecha o antes. Devuelve (tc, fecha) o (None, None)."""
+        r = self.con.execute("SELECT tipo_cambio, fecha FROM cotizaciones WHERE moneda=? AND fecha<=? "
+                             "ORDER BY fecha DESC LIMIT 1", (moneda, parse_fecha(fecha))).fetchone()
+        return (r[0], r[1]) if r else (None, None)
+
+    def tipo_cambio_entre(self, origen, destino, fecha):
+        """Unidades de 'destino' por 1 unidad de 'origen' a la fecha. Las cotizaciones se guardan en pesos
+        uruguayos por unidad (como las publica el BCU); entre otras monedas se calcula el cruce a través del
+        peso. Devuelve (tc, fecha de la cotización más antigua usada) o (None, None)."""
+        if origen == destino:
+            return 1.0, parse_fecha(fecha)
+        cot = lambda m: (1.0, None) if m == "UYU" else self.cotizacion(m, fecha)   # noqa: E731
+        (a, fa), (b, fb) = cot(origen), cot(destino)
+        if a is None or b is None:
+            return None, None
+        fechas = [f for f in (fa, fb) if f]
+        tc = a if destino == "UYU" else round(a / b, 6)
+        return tc, (min(fechas) if fechas else parse_fecha(fecha))
+
+    def tipo_cambio(self, emp, moneda, fecha):
+        """Cotización de 'moneda' en la moneda funcional de la empresa (con pesos: la cotización cargada)."""
+        return self.tipo_cambio_entre(moneda, self.empresa(emp)["moneda_nacional"], fecha)
+
+    def faltan_cotizaciones(self, emp, moneda, fecha):
+        """Monedas cuya cotización falta para convertir 'moneda' a la funcional (para los mensajes)."""
+        fun = self.empresa(emp)["moneda_nacional"]
+        return [m for m in (moneda, fun) if m != "UYU" and self.cotizacion(m, fecha)[0] is None]
+
+    def texto_cifras(self, emp, moneda=None):
+        """«Cifras en pesos uruguayos» o la moneda que corresponda."""
+        if self._cifras and not moneda:
+            return self._cifras
+        mon = moneda or self.empresa(emp)["moneda_nacional"]
+        if mon in ain.MONEDAS_ALTA:
+            return f"Cifras en {ain.MONEDAS_ALTA[mon][2]}"
+        m = self.moneda(mon)
+        return f"Cifras en {m['nombre'].lower() if m else mon} ({mon})"
+
+    def importar_cotizaciones(self, moneda, ruta):
+        """Importa un histórico desde CSV (fecha;tipo_cambio) o Excel (columna A fecha, B tipo de cambio).
+        Las filas que no se pueden interpretar (por ejemplo, el encabezado) se saltean."""
+        filas = []
+        if ruta.lower().endswith((".xlsx", ".xlsm")):
+            try:
+                from openpyxl import load_workbook
+            except ImportError:
+                raise ErrorContable("Para importar desde Excel falta la librería openpyxl (ejecute instalar.bat).")
+            ws = load_workbook(ruta, read_only=True, data_only=True).active
+            for r in ws.iter_rows(min_col=1, max_col=2, values_only=True):
+                filas.append(r)
+        else:
+            import csv
+            with open(ruta, encoding="utf-8-sig", newline="") as f:
+                muestra = f.read(2048)
+                f.seek(0)
+                sep = ";" if ";" in muestra else ("\t" if "\t" in muestra else ",")
+                for r in csv.reader(f, delimiter=sep):
+                    if len(r) >= 2:
+                        filas.append((r[0], r[1]))
+        ok = salteadas = 0
+        datos = []
+        for fecha, tc in filas:
+            try:
+                f_iso = fecha.date().isoformat() if hasattr(fecha, "date") else parse_fecha(str(fecha))
+                v = round(float(tc), 6) if isinstance(tc, (int, float)) else parse_tc(tc)
+                datos.append((moneda, f_iso, v))
+                ok += 1
+            except (ErrorContable, TypeError, ValueError):
+                salteadas += 1
+        if not ok:
+            raise ErrorContable("No se encontró ninguna fila válida. El archivo debe tener la fecha en la "
+                                "primera columna y el tipo de cambio en la segunda.")
+        with self.con:
+            self.con.executemany("INSERT OR REPLACE INTO cotizaciones(moneda,fecha,tipo_cambio,fuente) "
+                                 "VALUES (?,?,?,'importado')", datos)
+        return ok, salteadas
+
+    # ---------------------------------------------- cotizaciones del BCU (7.6)
+    def alta_moneda_iso(self, codigo, activa=True):
+        """Da de alta una moneda con el nombre y los decimales de la norma ISO 4217."""
+        iso = ain.moneda_iso(codigo)
+        if not iso:
+            raise ErrorContable(f"{codigo} no es un código vigente de la norma ISO 4217.")
+        simbolo = ain.MONEDAS_ALTA.get(iso["codigo"], (None, iso["codigo"]))[1]
+        self.guardar_moneda(iso["codigo"], iso["nombre"], simbolo, iso["decimales"], activa)
+
+    def monedas_bcu(self):
+        """Monedas que actualiza el botón del BCU: siempre USD, EUR y GBP, más las demás monedas activas
+        que el BCU publica."""
+        activas = [m["codigo"] for m in self.monedas(solo_activas=True)]
+        return list(bcu.SIEMPRE) + [m for m in activas if m in bcu.MONEDAS_BCU and m not in bcu.SIEMPRE]
+
+    def vista_cotizaciones_bcu(self, fecha, monedas=None, transporte=None):
+        """Consulta al BCU sin grabar nada. Cada propuesta trae, además de lo que devuelve
+        cotizaciones_bcu.cotizaciones_para, la situación frente a lo que ya está cargado:
+        'nueva', 'igual', 'reemplaza BCU', 'manual' (hay una cargada a mano o importada, distinta: se reemplaza
+        solo con confirmación), 'revisar' (el arbitraje no coincide) o 'no publicada'."""
+        fecha = parse_fecha(fecha)
+        props = bcu.cotizaciones_para(fecha, monedas or self.monedas_bcu(), transporte)
+        for p in props:
+            if p["tc"] is None:
+                p["situacion"] = "no publicada"
+                continue
+            if p["revisar"]:
+                p["situacion"] = "revisar"
+                continue
+            previa = self.con.execute("SELECT tipo_cambio, fuente FROM cotizaciones WHERE moneda=? AND fecha=?",
+                                      (p["moneda"], p["fecha_efectiva"])).fetchone()
+            p["anterior"] = previa["tipo_cambio"] if previa else None
+            p["fuente_anterior"] = previa["fuente"] if previa else None
+            if not previa:
+                p["situacion"] = "nueva"
+            elif abs(previa["tipo_cambio"] - p["tc"]) < 1e-9:
+                p["situacion"] = "igual"
+            elif previa["fuente"] == "BCU":
+                p["situacion"] = "reemplaza BCU"
+            else:
+                p["situacion"] = "manual"
+        return props
+
+    def grabar_cotizaciones_bcu(self, propuestas, reemplazar_manuales=()):
+        """Graba las propuestas de la vista previa. Las que reemplazan una cotización cargada a mano o importada
+        solo se graban si su moneda está en 'reemplazar_manuales'. Devuelve (grabadas, omitidas)."""
+        grabadas, omitidas = [], []
+        with self.con:
+            for p in propuestas:
+                sit = p.get("situacion")
+                if sit in ("no publicada", "revisar", "igual") or (sit == "manual" and
+                                                                  p["moneda"] not in reemplazar_manuales):
+                    omitidas.append(p)
+                    continue
+                if not self.moneda(p["moneda"]):
+                    self.alta_moneda_iso(p["moneda"])
+                self.con.execute("INSERT OR REPLACE INTO cotizaciones(moneda,fecha,tipo_cambio,fuente,detalle) "
+                                 "VALUES (?,?,?,'BCU',?)", (p["moneda"], p["fecha_efectiva"], p["tc"], p["detalle"]))
+                grabadas.append(p)
+        return grabadas, omitidas
+
+    # ------------------------------------------------- locales, libros, cc
+    def locales(self, emp, solo_activos=False):
+        return self.con.execute("SELECT * FROM locales WHERE empresa_id=?" + (" AND activo=1" if solo_activos else "")
+                                + " ORDER BY codigo", (emp,)).fetchall()
+
+    def _guardar_dimension(self, tabla, nombre_ui, emp, codigo, nombre, activo, item_id):
+        codigo = (codigo or "").strip().upper()
+        if not re.fullmatch(r"[A-Z0-9_\-]{1,10}", codigo):
+            raise ErrorContable(f"El código del {nombre_ui} debe tener entre 1 y 10 letras o números, sin espacios.")
+        if not (nombre or "").strip():
+            raise ErrorContable(f"Falta el nombre del {nombre_ui}.")
+        if self.con.execute(f"SELECT 1 FROM {tabla} WHERE empresa_id=? AND codigo=? AND id<>?",
+                            (emp, codigo, item_id or 0)).fetchone():
+            raise ErrorContable(f"Ya existe un {nombre_ui} con el código {codigo}.")
+        with self.con:
+            if item_id:
+                self.con.execute(f"UPDATE {tabla} SET codigo=?, nombre=?, activo=? WHERE id=? AND empresa_id=?",
+                                 (codigo, nombre.strip(), int(bool(activo)), item_id, emp))
+                return item_id
+            return self.con.execute(f"INSERT INTO {tabla}(empresa_id,codigo,nombre,activo) VALUES (?,?,?,?)",
+                                    (emp, codigo, nombre.strip(), int(bool(activo)))).lastrowid
+
+    def guardar_local(self, emp, codigo, nombre, activo=True, local_id=None):
+        if local_id and not activo and len(self.locales(emp, solo_activos=True)) <= 1:
+            raise ErrorContable("La empresa necesita al menos un local activo.")
+        return self._guardar_dimension("locales", "local", emp, codigo, nombre, activo, local_id)
+
+    def eliminar_local(self, local_id):
+        loc = self.con.execute("SELECT * FROM locales WHERE id=?", (local_id,)).fetchone()
+        if len(self.locales(loc["empresa_id"])) <= 1:
+            raise ErrorContable("No se puede dar de baja el único local de la empresa.")
+        if self.con.execute("SELECT 1 FROM asientos WHERE local_id=? UNION ALL "
+                            "SELECT 1 FROM movimientos WHERE local_id=? LIMIT 1", (local_id, local_id)).fetchone():
+            raise ErrorContable("No se puede dar de baja: el local tiene asientos registrados. Puede desactivarlo.")
+        if self.con.execute("SELECT 1 FROM cuentas WHERE local_id=? LIMIT 1", (local_id,)).fetchone():
+            raise ErrorContable("No se puede dar de baja: hay cuentas del plan asignadas a este local.")
+        self._sin_presupuesto("local_id", local_id, "el local")
+        with self.con:
+            self.con.execute("DELETE FROM locales WHERE id=?", (local_id,))
+
+    def guardar_centro_costo(self, emp, codigo, nombre, activo=True, cc_id=None):
+        return self._guardar_dimension("centros_costo", "centro de costos", emp, codigo, nombre, activo, cc_id)
+
+    def eliminar_centro_costo(self, cc_id):
+        if self.con.execute("SELECT 1 FROM movimientos WHERE cc_id=? LIMIT 1", (cc_id,)).fetchone():
+            raise ErrorContable("No se puede dar de baja: el centro de costos tiene movimientos. Puede desactivarlo.")
+        if self.con.execute("SELECT 1 FROM cuentas WHERE cc_id=? LIMIT 1", (cc_id,)).fetchone():
+            raise ErrorContable("No se puede dar de baja: hay cuentas del plan asignadas a este centro de costos.")
+        self._sin_presupuesto("cc_id", cc_id, "el centro de costos")
+        with self.con:
+            self.con.execute("DELETE FROM centros_costo WHERE id=?", (cc_id,))
+
+    def libros(self, emp):
+        return self.con.execute("SELECT * FROM libros WHERE empresa_id=? ORDER BY tipo DESC, codigo",
+                                (emp,)).fetchall()
+
+    def centros_costo(self, emp, solo_activos=False):
+        return self.con.execute("SELECT * FROM centros_costo WHERE empresa_id=?"
+                                + (" AND activo=1" if solo_activos else "") + " ORDER BY codigo", (emp,)).fetchall()
+
+    def _validar_dims(self, emp, local_id, cc_id, donde=""):
+        if local_id and not self.con.execute("SELECT 1 FROM locales WHERE id=? AND empresa_id=?",
+                                             (local_id, emp)).fetchone():
+            raise ErrorContable(f"{donde}el local no pertenece a esta empresa.")
+        if cc_id and not self.con.execute("SELECT 1 FROM centros_costo WHERE id=? AND empresa_id=?",
+                                          (cc_id, emp)).fetchone():
+            raise ErrorContable(f"{donde}el centro de costos no pertenece a esta empresa.")
+
+    def guardar_libro(self, emp, codigo, nombre, tipo, libro_id=None):
+        codigo = (codigo or "").strip().upper()
+        if not codigo or not (nombre or "").strip():
+            raise ErrorContable("El libro necesita código y nombre.")
+        if tipo not in ("DIARIO", "AUXILIAR"):
+            raise ErrorContable("El tipo de libro debe ser DIARIO o AUXILIAR.")
+        if libro_id:
+            actual = self.con.execute("SELECT * FROM libros WHERE id=?", (libro_id,)).fetchone()
+            if actual and actual["codigo"] == "DG" and (codigo != "DG" or tipo != "DIARIO"):
+                raise ErrorContable("El Diario general (DG) se crea con la empresa: se le puede cambiar el nombre, "
+                                    "pero no el código ni el tipo.")
+        dup = self.con.execute("SELECT id FROM libros WHERE empresa_id=? AND codigo=? AND id<>?",
+                               (emp, codigo, libro_id or 0)).fetchone()
+        if dup:
+            raise ErrorContable(f"Ya existe un libro con el código {codigo}.")
+        with self.con:
+            if libro_id:
+                self.con.execute("UPDATE libros SET codigo=?,nombre=?,tipo=? WHERE id=?",
+                                 (codigo, nombre.strip(), tipo, libro_id))
+            else:
+                self.con.execute("INSERT INTO libros(empresa_id,codigo,nombre,tipo) VALUES (?,?,?,?)",
+                                 (emp, codigo, nombre.strip(), tipo))
+
+    def eliminar_libro(self, libro_id):
+        l = self.con.execute("SELECT codigo FROM libros WHERE id=?", (libro_id,)).fetchone()
+        if l and l["codigo"] == "DG":
+            raise ErrorContable("El Diario general no se puede eliminar: se crea con la empresa y es el libro "
+                                "obligatorio donde se registran los asientos.")
+        if self.con.execute("SELECT 1 FROM asientos WHERE libro_id=?", (libro_id,)).fetchone():
+            raise ErrorContable("No se puede eliminar el libro: tiene asientos registrados.")
+        with self.con:
+            self.con.execute("DELETE FROM libros WHERE id=?", (libro_id,))
+
+    # ------------------------------------------------------ plan de cuentas
+    @staticmethod
+    def longitudes(estructura):
+        acum, out = 0, []
+        for p in estructura.split("-"):
+            acum += int(p)
+            out.append(acum)
+        return out
+
+    def cuentas(self, emp):
+        return self.con.execute("SELECT * FROM cuentas WHERE empresa_id=? ORDER BY codigo", (emp,)).fetchall()
+
+    def cuenta(self, cta_id):
+        return self.con.execute("SELECT * FROM cuentas WHERE id=?", (cta_id,)).fetchone()
+
+    def cuenta_por_codigo(self, emp, codigo):
+        return self.con.execute("SELECT * FROM cuentas WHERE empresa_id=? AND codigo=?",
+                                (emp, codigo)).fetchone()
+
+    def tiene_movimientos(self, cta_id):
+        return self.con.execute("SELECT 1 FROM movimientos WHERE cuenta_id=? LIMIT 1",
+                                (cta_id,)).fetchone() is not None
+
+    def tiene_hijos(self, cta_id):
+        return self.con.execute("SELECT 1 FROM cuentas WHERE padre_id=? LIMIT 1",
+                                (cta_id,)).fetchone() is not None
+
+    def _validar_codigo(self, emp, codigo):
+        estructura = self.empresa(emp)["estructura"]
+        longs = self.longitudes(estructura)
+        if not re.fullmatch(r"\d+", codigo or ""):
+            raise ErrorContable("El código de la cuenta debe tener solo números.")
+        if codigo[0] not in "123456":
+            raise ErrorContable("El primer dígito indica el grupo: 1 Activo, 2 Pasivo, 3 Patrimonio, "
+                                "4 Ingresos, 5 Gastos, 6 Cuentas de orden.")
+        if len(codigo) not in longs:
+            raise ErrorContable(f"Con la estructura {estructura} los códigos pueden tener "
+                                f"{', '.join(map(str, longs))} dígitos; «{codigo}» tiene {len(codigo)}.")
+        nivel = longs.index(len(codigo)) + 1
+        padre = None
+        if nivel > 1:
+            cod_padre = codigo[:longs[nivel - 2]]
+            padre = self.cuenta_por_codigo(emp, cod_padre)
+            if not padre:
+                raise ErrorContable(f"Primero hay que crear el rubro superior {cod_padre}.")
+            if padre["imputable"]:
+                raise ErrorContable(f"El rubro {cod_padre} {padre['nombre']} está marcado como cuenta "
+                                    "con movimiento. Un rubro con movimiento no puede tener subcuentas: "
+                                    "desmárquelo primero (solo es posible si no tiene movimientos).")
+        return nivel, padre
+
+    def crear_cuenta(self, emp, codigo, nombre, imputable, naturaleza=None, seccion=None,
+                     descripcion="", moneda=None, local_id=None, cc_id=None, auxiliar=None):
+        codigo = (codigo or "").strip()
+        if not (nombre or "").strip():
+            raise ErrorContable("Falta el nombre de la cuenta.")
+        self._validar_auxiliar(auxiliar, imputable)
+        if self.cuenta_por_codigo(emp, codigo):
+            raise ErrorContable(f"Ya existe la cuenta {codigo}.")
+        nivel, padre = self._validar_codigo(emp, codigo)
+        if nivel == 1 and imputable:
+            raise ErrorContable("Los grupos de primer nivel (1 a 6) no pueden recibir movimientos.")
+        naturaleza = naturaleza or naturaleza_por_codigo(codigo)
+        self._validar_dims(emp, local_id, cc_id)
+        if seccion and seccion not in pm.SECCIONES:
+            raise ErrorContable(f"Sección de estados financieros desconocida: {seccion}")
+        with self.con:
+            cur = self.con.execute(
+                "INSERT INTO cuentas(empresa_id,codigo,nombre,nivel,padre_id,imputable,naturaleza,"
+                "seccion,moneda,local_id,cc_id,descripcion,auxiliar) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (emp, codigo, nombre.strip(), nivel, padre["id"] if padre else None, int(bool(imputable)),
+                 naturaleza, seccion or None, moneda or None, local_id, cc_id, descripcion or "", auxiliar or None))
+        return cur.lastrowid
+
+    def modificar_cuenta(self, cta_id, codigo, nombre, imputable, naturaleza=None, seccion=None,
+                         descripcion="", moneda=None, local_id=None, cc_id=None, auxiliar=MANTENER):
+        actual = self.cuenta(cta_id)
+        if auxiliar is MANTENER:
+            auxiliar = actual["auxiliar"]
+        self._validar_auxiliar(auxiliar, imputable)
+        if auxiliar and auxiliar != actual["auxiliar"]:
+            n = self.con.execute("SELECT COUNT(*) FROM movimientos WHERE cuenta_id=? AND tercero_id IS NULL",
+                                 (cta_id,)).fetchone()[0]
+            if n:
+                raise ErrorContable(f"No se puede exigir auxiliar: la cuenta ya tiene {n} movimientos sin cliente "
+                                    "o proveedor. Corrija esos asientos primero.")
+        emp = actual["empresa_id"]
+        codigo = (codigo or "").strip()
+        if not (nombre or "").strip():
+            raise ErrorContable("Falta el nombre de la cuenta.")
+        movs = self.tiene_movimientos(cta_id)
+        hijos = self.tiene_hijos(cta_id)
+        nivel, padre = actual["nivel"], None
+        padre_id = actual["padre_id"]
+        if codigo != actual["codigo"]:
+            if movs or hijos:
+                raise ErrorContable("No se puede cambiar el código: la cuenta tiene movimientos o subcuentas.")
+            if self.cuenta_por_codigo(emp, codigo):
+                raise ErrorContable(f"Ya existe la cuenta {codigo}.")
+            nivel, padre = self._validar_codigo(emp, codigo)
+            padre_id = padre["id"] if padre else None
+        if actual["imputable"] and not imputable and movs:
+            raise ErrorContable("No se puede desmarcar «con movimiento»: la cuenta ya tiene movimientos.")
+        if imputable and hijos:
+            raise ErrorContable("Un rubro con subcuentas no puede marcarse como cuenta con movimiento.")
+        if nivel == 1 and imputable:
+            raise ErrorContable("Los grupos de primer nivel (1 a 6) no pueden recibir movimientos.")
+        self._validar_dims(emp, local_id, cc_id)
+        if moneda != actual["moneda"] and movs:
+            raise ErrorContable("No se puede cambiar la moneda de una cuenta con movimientos.")
+        if seccion and seccion not in pm.SECCIONES:
+            raise ErrorContable(f"Sección de estados financieros desconocida: {seccion}")
+        with self.con:
+            self.con.execute(
+                "UPDATE cuentas SET codigo=?,nombre=?,nivel=?,padre_id=?,imputable=?,naturaleza=?,"
+                "seccion=?,moneda=?,local_id=?,cc_id=?,descripcion=?,auxiliar=? WHERE id=?",
+                (codigo, nombre.strip(), nivel, padre_id, int(bool(imputable)),
+                 naturaleza or naturaleza_por_codigo(codigo), seccion or None, moneda or None,
+                 local_id, cc_id, descripcion or "", auxiliar or None, cta_id))
+
+    @staticmethod
+    def _validar_auxiliar(auxiliar, imputable):
+        if auxiliar not in (None, "", "C", "P"):
+            raise ErrorContable("El auxiliar debe ser de clientes (C) o de proveedores (P).")
+        if auxiliar and not imputable:
+            raise ErrorContable("Solo una cuenta con movimiento puede exigir auxiliar de clientes o proveedores.")
+
+    def eliminar_cuenta(self, cta_id):
+        if self.tiene_movimientos(cta_id):
+            raise ErrorContable("No se puede dar de baja: la cuenta tiene movimientos registrados.")
+        if self.tiene_hijos(cta_id):
+            raise ErrorContable("No se puede dar de baja: primero elimine las subcuentas.")
+        self._sin_presupuesto("cuenta_id", cta_id, "la cuenta")
+        r = self.con.execute("SELECT m.nombre FROM modelo_lineas l JOIN modelos_asiento m ON m.id=l.modelo_id "
+                             "WHERE l.cuenta_id=? LIMIT 1", (cta_id,)).fetchone()
+        if r:
+            raise ErrorContable(f"No se puede dar de baja: la cuenta se usa en el modelo de asiento «{r[0]}».")
+        with self.con:
+            self.con.execute("DELETE FROM cuentas WHERE id=?", (cta_id,))
+
+    def _sin_presupuesto(self, campo, valor, que):
+        r = self.con.execute(f"SELECT p.nombre FROM presupuesto_items i JOIN presupuestos p ON p.id=i.presupuesto_id "
+                             f"WHERE i.{campo}=? LIMIT 1", (valor,)).fetchone()
+        if r:
+            raise ErrorContable(f"No se puede dar de baja: {que} tiene importes en el presupuesto «{r[0]}».")
+
+    def cargar_plan_modelo(self, emp):
+        for codigo, nombre, seccion, desc, moneda in pm.PLAN:
+            if self.cuenta_por_codigo(emp, codigo):
+                continue
+            imputable = len(codigo) == 4
+            self.crear_cuenta(emp, codigo, nombre, imputable, naturaleza=pm.NATURALEZA_ESPECIAL.get(codigo),
+                              seccion=seccion, descripcion=desc, moneda=moneda, auxiliar=pm.AUXILIARES.get(codigo))
+        g, p = self.cuenta_por_codigo(emp, "4313"), self.cuenta_por_codigo(emp, "5414")
+        e = self.empresa(emp)
+        with self.con:
+            self.con.execute("UPDATE empresas SET cta_dif_ganada=?, cta_dif_perdida=? WHERE id=?",
+                             (e["cta_dif_ganada"] or (g and g["id"]), e["cta_dif_perdida"] or (p and p["id"]), emp))
+
+    def mapa_cuentas(self, emp):
+        """Diccionario id -> dict con datos y sección efectiva (heredada)."""
+        filas = [dict(r) for r in self.cuentas(emp)]
+        por_id = {f["id"]: f for f in filas}
+        for f in filas:  # ordenadas por código: el padre siempre se procesa antes
+            if f["seccion"]:
+                f["seccion_ef"] = f["seccion"]
+            elif f["padre_id"] and por_id[f["padre_id"]].get("seccion_ef"):
+                f["seccion_ef"] = por_id[f["padre_id"]]["seccion_ef"]
+            else:
+                f["seccion_ef"] = pm.SECCION_POR_GRUPO[f["codigo"][0]]
+            padre = por_id.get(f["padre_id"]) or {}
+            f["local_ef"] = f["local_id"] or padre.get("local_ef")
+            f["cc_ef"] = f["cc_id"] or padre.get("cc_ef")
+        return por_id
+
+    def imputacion_por_defecto(self, cuenta_id):
+        """(local_id, cc_id) que la cuenta propone, propios o heredados de sus rubros superiores."""
+        c = self.cuenta(cuenta_id)
+        local_id = cc_id = None
+        while c and not (local_id and cc_id):
+            local_id = local_id or c["local_id"]
+            cc_id = cc_id or c["cc_id"]
+            c = self.cuenta(c["padre_id"]) if c["padre_id"] else None
+        return local_id, cc_id
+
+    # ------------------------------------------------------------- asientos
+    def proximo_numero(self, emp):
+        r = self.con.execute("SELECT COALESCE(MAX(numero),0)+1 FROM asientos WHERE empresa_id=?",
+                             (emp,)).fetchone()
+        return r[0]
+
+    def validar_lineas(self, emp, lineas, tipo="NORMAL", asiento_id=None):
+        """Valida las reglas de la partida doble. Devuelve (total_debe, total_haber)."""
+        if len(lineas) < 2:
+            raise ErrorContable("Un asiento necesita al menos dos movimientos: en partida doble "
+                                "no hay deudor sin acreedor.")
+        td = th = 0
+        for i, l in enumerate(lineas, 1):
+            d, h = int(l.get("debe") or 0), int(l.get("haber") or 0)
+            if d < 0 or h < 0:
+                raise ErrorContable(f"Línea {i}: los importes no pueden ser negativos.")
+            if (d > 0) == (h > 0):
+                raise ErrorContable(f"Línea {i}: cada movimiento va al Debe o al Haber, no a ambos ni a ninguno.")
+            cta = self.cuenta(l["cuenta_id"])
+            if not cta or cta["empresa_id"] != emp:
+                raise ErrorContable(f"Línea {i}: la cuenta no existe en esta empresa.")
+            if not cta["imputable"]:
+                raise ErrorContable(f"Línea {i}: {cta['codigo']} {cta['nombre']} es un rubro agrupador; "
+                                    "solo se registra en cuentas con movimiento.")
+            self._validar_me(emp, i, cta, l, d + h, tipo, asiento_id)
+            self._validar_tercero(emp, i, cta, l)
+            td += d
+            th += h
+        if td == 0 or th == 0:
+            raise ErrorContable("El asiento necesita al menos un movimiento al Debe y otro al Haber.")
+        if td != th:
+            raise ErrorContable(
+                f"El asiento no balancea: Debe {fmt_importe(td)} y Haber {fmt_importe(th)} "
+                f"(diferencia {fmt_importe(abs(td - th))}). En partida doble la suma del Debe "
+                "debe ser igual a la suma del Haber.")
+        return td, th
+
+    def _validar_me(self, emp, i, cta, l, pesos, tipo, asiento_id):
+        mon, me, tc = l.get("moneda") or None, l.get("importe_me"), l.get("tipo_cambio")
+        nacional = self.empresa(emp)["moneda_nacional"]
+        if mon == nacional:
+            mon = l["moneda"] = None
+        if cta["moneda"] and mon != cta["moneda"]:
+            raise ErrorContable(f"Línea {i}: la cuenta {cta['codigo']} {cta['nombre']} se lleva en {cta['moneda']}; "
+                                f"el movimiento debe registrarse en {cta['moneda']} con su tipo de cambio.")
+        if not mon:
+            if me:
+                raise ErrorContable(f"Línea {i}: hay importe en moneda extranjera pero no se indicó la moneda.")
+            return
+        if not self.moneda(mon):
+            raise ErrorContable(f"Línea {i}: la moneda {mon} no existe.")
+        ajuste = tipo in ("DIF_CAMBIO",) + TIPOS_CIERRE and not me
+        if ajuste:
+            return  # ajuste por diferencia de cambio (o cierre de un saldo solo en pesos): solo mueve pesos
+        if not me or me <= 0:
+            raise ErrorContable(f"Línea {i}: falta el importe en {mon}.")
+        if not tc or tc <= 0:
+            raise ErrorContable(f"Línea {i}: falta el tipo de cambio.")
+        if abs(pesos_de(me, tc) - pesos) > 1:
+            raise ErrorContable(f"Línea {i}: {mon} {fmt_importe(me)} × {fmt_tc(tc)} = $ {fmt_importe(pesos_de(me, tc))}, "
+                                f"pero el movimiento dice $ {fmt_importe(pesos)}.")
+        ref = l.get("ref_asiento_id")
+        if ref:
+            a = self.asiento(ref)
+            if not a or a["empresa_id"] != emp or ref == asiento_id:
+                raise ErrorContable(f"Línea {i}: el asiento que se cancela no es válido.")
+            if not self.con.execute("SELECT 1 FROM movimientos WHERE asiento_id=? AND cuenta_id=? AND importe_me>0",
+                                    (ref, cta["id"])).fetchone():
+                raise ErrorContable(f"Línea {i}: el asiento Nº {a['numero']} no tiene una operación en "
+                                    f"{mon} en la cuenta {cta['codigo']}.")
+
+    def preparar_asiento(self, emp, fecha, libro_id, local_id, lineas, tipo="NORMAL", asiento_id=None):
+        """Valida un asiento completo sin guardarlo y completa los datos por defecto de sus líneas
+        (local, centro de costos, vencimiento). Devuelve la fecha en formato AAAA-MM-DD."""
+        fecha = parse_fecha(fecha)
+        self.verificar_periodo_abierto(emp, fecha)
+        if asiento_id:
+            previo = self.asiento(asiento_id)
+            if previo:
+                self.verificar_periodo_abierto(emp, previo["fecha"], "modificar")
+                if previo["tipo"] in TIPOS_CIERRE:
+                    raise ErrorContable("Los asientos de refundición, cierre y apertura no se modifican: se "
+                                        "deshace el cierre y se vuelve a generar.")
+        if not libro_id:
+            raise ErrorContable("Indique en qué libro se registra el asiento.")
+        if not self.con.execute("SELECT 1 FROM libros WHERE id=? AND empresa_id=?", (libro_id, emp)).fetchone():
+            raise ErrorContable("El libro no pertenece a esta empresa.")
+        if not local_id:
+            raise ErrorContable("Indique el local de la empresa al que corresponde el asiento.")
+        self._validar_dims(emp, local_id, None)
+        for i, l in enumerate(lineas, 1):
+            if "local_id" not in l or "cc_id" not in l:   # se completan con lo que propone la cuenta
+                loc_def, cc_def = self.imputacion_por_defecto(l["cuenta_id"])
+                l.setdefault("local_id", loc_def)
+                l.setdefault("cc_id", cc_def)
+            self._validar_dims(emp, l.get("local_id"), l.get("cc_id"), f"Línea {i}: ")
+        self.validar_lineas(emp, lineas, tipo, asiento_id)
+        for l in lineas:
+            l["vencimiento"] = self.vencimiento_por_defecto(fecha, self.cuenta(l["cuenta_id"]), l)
+        return fecha
+
+    def guardar_asiento(self, emp, fecha, libro_id, local_id, concepto, lineas,
+                        asiento_id=None, tipo="NORMAL"):
+        fecha = self.preparar_asiento(emp, fecha, libro_id, local_id, lineas, tipo, asiento_id)
+        with self.con:
+            if asiento_id:
+                self.con.execute("UPDATE asientos SET fecha=?,libro_id=?,local_id=?,concepto=?,tipo=? "
+                                 "WHERE id=?", (fecha, libro_id, local_id, concepto or "", tipo, asiento_id))
+                self.con.execute("DELETE FROM movimientos WHERE asiento_id=?", (asiento_id,))
+            else:
+                cur = self.con.execute(
+                    "INSERT INTO asientos(empresa_id,numero,fecha,libro_id,local_id,concepto,tipo) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (emp, self.proximo_numero(emp), fecha, libro_id, local_id, concepto or "", tipo))
+                asiento_id = cur.lastrowid
+            for i, l in enumerate(lineas, 1):
+                self.con.execute(
+                    "INSERT INTO movimientos(asiento_id,orden,cuenta_id,concepto,debe,haber,moneda,"
+                    "importe_me,tipo_cambio,cc_id,ref_asiento_id,local_id,tercero_id,vencimiento) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (asiento_id, i, l["cuenta_id"], l.get("concepto") or "", int(l.get("debe") or 0),
+                     int(l.get("haber") or 0), l.get("moneda") or None, l.get("importe_me") or None,
+                     l.get("tipo_cambio") if l.get("moneda") else None, l.get("cc_id"),
+                     l.get("ref_asiento_id") or None, l.get("local_id") or local_id,
+                     l.get("tercero_id") or None, l.get("vencimiento") or None))
+        return asiento_id
+
+    def eliminar_asiento(self, asiento_id):
+        a = self.asiento(asiento_id)
+        if a:
+            if a["tipo"] in TIPOS_CIERRE:
+                raise ErrorContable("Los asientos de refundición, cierre y apertura se eliminan juntos con "
+                                    "«Deshacer el último cierre» (Asientos › Cierre de ejercicio…).")
+            self.verificar_periodo_abierto(a["empresa_id"], a["fecha"], "eliminar")
+        r = self.con.execute("SELECT a.numero FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+                             "WHERE m.ref_asiento_id=? AND m.asiento_id<>? LIMIT 1",
+                             (asiento_id, asiento_id)).fetchone()
+        if r:
+            raise ErrorContable(f"No se puede eliminar: el asiento Nº {r[0]} cancela una operación en moneda "
+                                "extranjera de este asiento. Elimine o modifique primero ese asiento.")
+        with self.con:
+            self.con.execute("DELETE FROM asientos WHERE id=?", (asiento_id,))
+
+    def renumerar_asientos(self, emp):
+        """Numera correlativamente por fecha (como exige el libro diario). Los ejercicios cerrados no se
+        renumeran: se sigue desde el último número del período cerrado."""
+        hasta = self.cerrado_hasta(emp) or "0000-00-00"
+        base = self.con.execute("SELECT COALESCE(MAX(numero),0) FROM asientos WHERE empresa_id=? AND fecha<=?",
+                                (emp, hasta)).fetchone()[0]
+        filas = self.con.execute("SELECT id FROM asientos WHERE empresa_id=? AND fecha>? ORDER BY fecha, "
+                                 "CASE tipo WHEN 'APERTURA' THEN 0 ELSE 1 END, numero", (emp, hasta)).fetchall()
+        with self.con:
+            self.con.execute("UPDATE asientos SET numero=-numero WHERE empresa_id=? AND fecha>?", (emp, hasta))
+            for n, f in enumerate(filas, base + 1):
+                self.con.execute("UPDATE asientos SET numero=? WHERE id=?", (n, f["id"]))
+
+    def asientos(self, emp, desde=None, hasta=None, libro_id=None, buscar=None):
+        desde, hasta = _f(desde), _f(hasta)
+        sql = ("SELECT a.*, l.codigo AS libro_cod, l.nombre AS libro_nombre, "
+               "(SELECT SUM(debe) FROM movimientos m WHERE m.asiento_id=a.id) AS total "
+               "FROM asientos a JOIN libros l ON l.id=a.libro_id WHERE a.empresa_id=?")
+        par = [emp]
+        if desde:
+            sql += " AND a.fecha>=?"
+            par.append(desde)
+        if hasta:
+            sql += " AND a.fecha<=?"
+            par.append(hasta)
+        if libro_id:
+            sql += " AND a.libro_id=?"
+            par.append(libro_id)
+        if buscar:
+            sql += " AND (CAST(a.numero AS TEXT)=? OR a.concepto LIKE ?)"
+            par += [buscar.strip(), f"%{buscar.strip()}%"]
+        return self.con.execute(sql + " ORDER BY a.fecha, a.numero", par).fetchall()
+
+    def ultima_fecha(self, emp):
+        return self.con.execute("SELECT MAX(fecha) FROM asientos WHERE empresa_id=?", (emp,)).fetchone()[0]
+
+    def asiento(self, asiento_id):
+        return self.con.execute("SELECT * FROM asientos WHERE id=?", (asiento_id,)).fetchone()
+
+    def movimientos_de(self, asiento_id):
+        return self.con.execute(
+            "SELECT m.*, c.codigo, c.nombre, r.numero AS ref_numero, lo.codigo AS local_cod, "
+            "cc.codigo AS cc_cod, t.codigo AS ter_cod, t.nombre AS ter_nom FROM movimientos m "
+            "LEFT JOIN terceros t ON t.id=m.tercero_id "
+            "JOIN cuentas c ON c.id=m.cuenta_id LEFT JOIN asientos r ON r.id=m.ref_asiento_id "
+            "LEFT JOIN locales lo ON lo.id=m.local_id LEFT JOIN centros_costo cc ON cc.id=m.cc_id "
+            "WHERE m.asiento_id=? ORDER BY m.orden", (asiento_id,)).fetchall()
+
+    # --------------------------------------------------- diferencia de cambio
+    def cuentas_dif_cambio(self, emp):
+        """Cuentas donde se imputan las diferencias de cambio (ganada, perdida)."""
+        e = self.empresa(emp)
+        g = self.cuenta(e["cta_dif_ganada"]) if e["cta_dif_ganada"] else self.cuenta_por_codigo(emp, "4313")
+        p = self.cuenta(e["cta_dif_perdida"]) if e["cta_dif_perdida"] else self.cuenta_por_codigo(emp, "5414")
+        if not g or not p or not g["imputable"] or not p["imputable"]:
+            raise ErrorContable("Defina en la pestaña Empresas las cuentas de «Diferencia de cambio ganada» "
+                                "y «Diferencia de cambio perdida» (deben ser cuentas con movimiento).")
+        return g, p
+
+    def fijar_cuentas_dif_cambio(self, emp, codigo_ganada, codigo_perdida):
+        ids = []
+        for cod, grupo, nombre in ((codigo_ganada, "4", "ganada"), (codigo_perdida, "5", "perdida")):
+            cod = (cod or "").strip()
+            if not cod:
+                ids.append(None)
+                continue
+            c = self.cuenta_por_codigo(emp, cod)
+            if not c or not c["imputable"]:
+                raise ErrorContable(f"La cuenta {cod} para diferencia de cambio {nombre} no existe o no es "
+                                    "una cuenta con movimiento.")
+            if c["codigo"][0] != grupo:
+                raise ErrorContable(f"La diferencia de cambio {nombre} debe ser una cuenta del grupo {grupo} "
+                                    f"({pm.GRUPOS[grupo]}).")
+            ids.append(c["id"])
+        with self.con:
+            self.con.execute("UPDATE empresas SET cta_dif_ganada=?, cta_dif_perdida=? WHERE id=?", (*ids, emp))
+
+    def operaciones_me(self, emp, cuenta_id, excluir_asiento=None):
+        """Operaciones en moneda extranjera de una cuenta, con su saldo pendiente de cancelar.
+        Una operación es un asiento que movió la cuenta en ME sin cancelar otra operación."""
+        orig = self.con.execute(
+            "SELECT a.id, a.numero, a.fecha, a.concepto, m.moneda, "
+            "SUM(CASE WHEN m.debe>0 THEN m.importe_me ELSE -m.importe_me END) AS me, "
+            "SUM(m.debe+m.haber) AS pesos, SUM(m.importe_me) AS me_abs "
+            "FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+            "WHERE a.empresa_id=? AND m.cuenta_id=? AND m.importe_me>0 AND m.ref_asiento_id IS NULL "
+            "AND a.id<>? GROUP BY a.id ORDER BY a.fecha, a.numero",
+            (emp, cuenta_id, excluir_asiento or 0)).fetchall()
+        out = []
+        for o in orig:
+            canc = self.con.execute(
+                "SELECT COALESCE(SUM(CASE WHEN debe>0 THEN importe_me ELSE -importe_me END),0) FROM movimientos "
+                "WHERE ref_asiento_id=? AND cuenta_id=? AND asiento_id<>?",
+                (o["id"], cuenta_id, excluir_asiento or 0)).fetchone()[0]
+            out.append(dict(asiento_id=o["id"], numero=o["numero"], fecha=o["fecha"], concepto=o["concepto"],
+                            moneda=o["moneda"], importe=o["me"], tc=o["pesos"] / o["me_abs"],
+                            pendiente=o["me"] + canc))
+        return out
+
+    def tc_historico(self, asiento_id, cuenta_id):
+        r = self.con.execute("SELECT SUM(debe+haber), SUM(importe_me) FROM movimientos WHERE asiento_id=? "
+                             "AND cuenta_id=? AND importe_me>0 AND ref_asiento_id IS NULL",
+                             (asiento_id, cuenta_id)).fetchone()
+        if not r or not r[1]:
+            return None
+        return round(r[0] / r[1], 6)
+
+    def linea_diferencia_cambio(self, emp, lineas):
+        """Si el asiento no balancea por usar tipos de cambio distintos (histórico al cancelar,
+        actual al cobrar o pagar), devuelve la línea de diferencia de cambio que lo equilibra."""
+        if not any(l.get("moneda") for l in lineas):
+            raise ErrorContable("El asiento no tiene movimientos en moneda extranjera: la diferencia "
+                                "no puede ser una diferencia de cambio. Revise los importes.")
+        dif = sum(int(l.get("debe") or 0) for l in lineas) - sum(int(l.get("haber") or 0) for l in lineas)
+        if dif == 0:
+            return None
+        g, p = self.cuentas_dif_cambio(emp)
+        if dif > 0:   # sobra Debe: se acredita una ganancia
+            return dict(cuenta_id=g["id"], concepto="Diferencia de cambio", debe=0, haber=dif)
+        return dict(cuenta_id=p["id"], concepto="Diferencia de cambio", debe=-dif, haber=0)
+
+    def revaluacion(self, emp, fecha):
+        """Ajusta los saldos de las cuentas en moneda extranjera al tipo de cambio de la fecha.
+        Devuelve (Reporte con el cálculo, líneas del asiento propuesto)."""
+        fecha = parse_fecha(fecha)
+        ctas = self.con.execute("SELECT * FROM cuentas WHERE empresa_id=? AND imputable=1 AND moneda IS NOT NULL "
+                                "ORDER BY codigo", (emp,)).fetchall()
+        rep = Reporte("Diferencia de cambio por revaluación",
+                      self._subtitulo(emp, f"Saldos en moneda extranjera ajustados al {fmt_fecha(fecha)}"),
+                      [("Cuenta", "texto", 34), ("Moneda", "texto", 7), ("Saldo en ME", "importe", 14),
+                       ("TC cierre", "texto", 10), ("Valor ajustado $", "importe", 16),
+                       ("Saldo contable $", "importe", 16), ("Diferencia $", "importe", 15)])
+        lineas, faltan = [], set()
+        ganada = perdida = 0
+        for c in ctas:
+            # las cuentas con auxiliar se revalúan cliente por cliente (o proveedor por proveedor)
+            grupo = ", m.tercero_id" if c["auxiliar"] else ""
+            filas = self.con.execute(
+                "SELECT COALESCE(SUM(CASE WHEN m.debe>0 THEN COALESCE(m.importe_me,0) ELSE -COALESCE(m.importe_me,0) END),0),"
+                f" COALESCE(SUM(m.debe-m.haber),0){grupo} FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+                f"WHERE m.cuenta_id=? AND a.fecha<=? {'GROUP BY m.tercero_id' if grupo else ''}",
+                (c["id"], fecha)).fetchall()
+            for r in filas:
+                saldo_me, saldo_pesos = r[0], r[1]
+                tercero = r[2] if grupo else None
+                if saldo_me == 0 and saldo_pesos == 0:
+                    continue
+                tc, _ = self.tipo_cambio(emp, c["moneda"], fecha)
+                if tc is None:
+                    faltan.update(self.faltan_cotizaciones(emp, c["moneda"], fecha))
+                    continue
+                ajustado = pesos_de(saldo_me, tc)
+                dif = ajustado - saldo_pesos
+                nombre = f"{c['codigo']} {c['nombre']}"
+                if tercero:
+                    t = self.tercero(tercero)
+                    nombre += f" · {t['codigo']} {t['nombre']}" if t else ""
+                rep.agregar([nombre, c["moneda"], saldo_me, fmt_tc(tc), ajustado, saldo_pesos, dif])
+                if dif:
+                    lineas.append(dict(cuenta_id=c["id"], moneda=c["moneda"], concepto=f"Ajuste a TC {fmt_tc(tc)}",
+                                       debe=max(dif, 0), haber=max(-dif, 0), tercero_id=tercero))
+                if dif > 0:
+                    ganada += dif
+                else:
+                    perdida -= dif
+        if faltan:
+            raise ErrorContable(f"Falta la cotización de {', '.join(sorted(faltan))} al {fmt_fecha(fecha)} "
+                                "o antes. Cárguela en Configuración › Monedas y cotizaciones.")
+        rep.agregar(["Diferencia de cambio ganada", "", None, "", None, None, ganada], "subtotal")
+        rep.agregar(["Diferencia de cambio perdida", "", None, "", None, None, -perdida], "subtotal")
+        rep.agregar(["RESULTADO NETO POR DIFERENCIA DE CAMBIO", "", None, "", None, None, ganada - perdida], "total")
+        rep.notas.append("Saldos positivos: deudores (activos). Entre paréntesis: acreedores (pasivos).")
+        rep.notas.append("Diferencia = Saldo en ME × TC de cierre − Saldo contable en pesos. Si un activo en ME "
+                         "vale más en pesos hay ganancia; si un pasivo en ME vale más, hay pérdida.")
+        if lineas:
+            g, p = self.cuentas_dif_cambio(emp)
+            if ganada:
+                lineas.append(dict(cuenta_id=g["id"], concepto="Diferencia de cambio por revaluación",
+                                   debe=0, haber=ganada))
+            if perdida:
+                lineas.append(dict(cuenta_id=p["id"], concepto="Diferencia de cambio por revaluación",
+                                   debe=perdida, haber=0))
+        else:
+            rep.notas.append("No hay diferencias para registrar: los saldos ya están al tipo de cambio de la fecha.")
+        return rep, lineas
+
+    def registrar_revaluacion(self, emp, fecha, libro_id=None, local_id=None):
+        _, lineas = self.revaluacion(emp, fecha)
+        if not lineas:
+            raise ErrorContable("No hay diferencias de cambio para registrar a esa fecha.")
+        libro_id = libro_id or next((l["id"] for l in self.libros(emp) if l["tipo"] == "DIARIO"), None)
+        local_id = local_id or self.locales(emp)[0]["id"]
+        return self.guardar_asiento(emp, fecha, libro_id, local_id,
+                                    f"Diferencia de cambio por revaluación al {fmt_fecha(parse_fecha(fecha))}",
+                                    lineas, tipo="DIF_CAMBIO")
+
+    # -------------------------------------------------------------- saldos
+    LOCAL_MOV = "COALESCE(m.local_id, a.local_id)"
+
+    def sumas(self, emp, desde=None, hasta=None, local_id=None, cc_id=None):
+        """cuenta_id -> [debe, haber] de las cuentas con movimiento en el período.
+        local_id / cc_id filtran por la imputación de cada movimiento; cc_id=SIN_ASIGNAR
+        toma los movimientos sin centro de costos."""
+        sql = ("SELECT m.cuenta_id, SUM(m.debe), SUM(m.haber) FROM movimientos m "
+               "JOIN asientos a ON a.id=m.asiento_id WHERE a.empresa_id=?")
+        par = [emp]
+        for cond, val in (("a.fecha>=?", desde), ("a.fecha<=?", hasta),
+                          (self.LOCAL_MOV + "=?", local_id), ("m.cc_id=?", cc_id)):
+            if val == SIN_ASIGNAR:
+                sql += " AND m.cc_id IS NULL"
+            elif val:
+                sql += " AND " + cond
+                par.append(val)
+        sql += " GROUP BY m.cuenta_id"
+        return {r[0]: [r[1], r[2]] for r in self.con.execute(sql, par)}
+
+    def sumas_por_dimension(self, emp, dimension, desde=None, hasta=None):
+        """{valor_dimension (id o None): {cuenta_id: [debe, haber]}} con dimension 'cc' o 'local'."""
+        expr = "m.cc_id" if dimension == "cc" else self.LOCAL_MOV
+        sql = (f"SELECT {expr}, m.cuenta_id, SUM(m.debe), SUM(m.haber) FROM movimientos m "
+               "JOIN asientos a ON a.id=m.asiento_id WHERE a.empresa_id=?")
+        par = [emp]
+        if desde:
+            sql += " AND a.fecha>=?"
+            par.append(desde)
+        if hasta:
+            sql += " AND a.fecha<=?"
+            par.append(hasta)
+        out = {}
+        for dim, cid, d, h in self.con.execute(sql + f" GROUP BY {expr}, m.cuenta_id", par):
+            out.setdefault(dim, {})[cid] = [d, h]
+        return out
+
+    def _subtitulo(self, emp, texto):
+        e = self.empresa(emp)
+        return f"{e['codigo']} — {e['nombre']}" + (f" · RUT {e['rut']}" if e["rut"] else "") + f"\n{texto}"
+
+    @staticmethod
+    def _ancestro(mapa, cta, nivel):
+        while cta["nivel"] > nivel and cta["padre_id"]:
+            cta = mapa[cta["padre_id"]]
+        return cta
+
+    # ------------------------------------------------------------ informes
+    def convertir_asiento(self, emp, movs, fecha, moneda):
+        """Importes de un asiento llevados de la moneda funcional a 'moneda' con el tipo de cambio de la fecha.
+        Se redondea línea por línea y la diferencia de redondeo se ajusta en la línea mayor del lado que
+        corresponda, para que el asiento siga balanceando. Devuelve ({id: (debe, haber)}, tc)."""
+        fun = self.empresa(emp)["moneda_nacional"]
+        tc, _ = self.tipo_cambio_entre(fun, moneda, fecha)
+        if tc is None:
+            faltan = [m for m in (fun, moneda) if m != "UYU" and self.cotizacion(m, fecha)[0] is None]
+            raise ErrorContable(f"Falta la cotización de {', '.join(faltan)} al {fmt_fecha(fecha)} o antes "
+                                "para mostrar el asiento en la moneda de presentación.")
+        out = {m["id"]: (int(round(m["debe"] * tc)), int(round(m["haber"] * tc))) for m in movs}
+        dif = sum(d for d, _ in out.values()) - sum(h for _, h in out.values())
+        if dif:
+            lado = 1 if dif > 0 else 0          # sobra Debe: se suma al Haber mayor; si no, al Debe mayor
+            mayor = max(out, key=lambda k: out[k][lado])
+            d, h = out[mayor]
+            out[mayor] = (d, h + dif) if lado else (d - dif, h)
+        return out, tc
+
+    def libro_diario(self, emp, desde=None, hasta=None, libro_id=None, moneda=None):
+        """Libro diario. Con 'moneda' distinta de la funcional (por ejemplo, la de presentación) cada asiento
+        se muestra convertido al tipo de cambio de su fecha."""
+        desde, hasta = _f(desde), _f(hasta)
+        per = self._texto_periodo(desde, hasta)
+        fun = self.empresa(emp)["moneda_nacional"]
+        moneda = None if not moneda or moneda == fun else moneda
+        titulo = "Libro Diario" + (f" en {moneda}" if moneda else "")
+        if moneda:
+            per += (f" · {self.texto_cifras(emp, moneda)}, convertidas desde {fun} al tipo de cambio de la fecha "
+                    "de cada asiento")
+        rep = Reporte(titulo, self._subtitulo(emp, per),
+                      [("Fecha / Nº", "texto", 14), ("Cuenta", "texto", 44), ("Debe", "importe", 16),
+                       ("Haber", "importe", 16)])
+        td = th = 0
+        ajustados = 0
+        for a in self.asientos(emp, desde, hasta, libro_id):
+            movs = self.movimientos_de(a["id"])
+            conv, tc = ({}, None)
+            if moneda:
+                conv, tc = self.convertir_asiento(emp, movs, a["fecha"], moneda)
+                if any(int(round(m["debe"] * tc)) != conv[m["id"]][0] or int(round(m["haber"] * tc)) != conv[m["id"]][1]
+                       for m in movs):
+                    ajustados += 1
+                movs = [dict(m, debe=conv[m["id"]][0], haber=conv[m["id"]][1]) for m in movs]
+            rep.agregar([f"{fmt_fecha(a['fecha'])}", f"Asiento Nº {a['numero']} · {a['libro_nombre']}"
+                         + (f" · {a['concepto']}" if a["concepto"] else "")
+                         + (f" · TC {fun}→{moneda} {fmt_tc(tc)}" if moneda else ""), None, None], "subtitulo")
+            for m in sorted(movs, key=lambda m: (m["haber"] > 0, m["orden"])):
+                texto = f"{m['codigo']} {m['nombre']}"
+                if m["concepto"]:
+                    texto += f" — {m['concepto']}"
+                if m["moneda"] and m["importe_me"]:
+                    texto += f" [{m['moneda']} {fmt_importe(m['importe_me'])} × {fmt_tc(m['tipo_cambio'])}]"
+                if m["ter_cod"]:
+                    texto += f" · {m['ter_cod']} {m['ter_nom']}"
+                if m["ref_numero"]:
+                    texto += f" (cancela As. Nº {m['ref_numero']})"
+                if m["haber"]:
+                    rep.agregar(["", "a " + texto, None, m["haber"]], nivel=2)
+                else:
+                    rep.agregar(["", texto, m["debe"], None], nivel=0)
+                td += m["debe"]
+                th += m["haber"]
+        rep.agregar(["", "TOTALES", td, th], "total")
+        if moneda:
+            rep.notas.append(f"Los importes se registraron en {fun} (moneda funcional) y se muestran en {moneda} "
+                             "multiplicados por el tipo de cambio de la fecha de cada asiento. Es una conversión "
+                             "para leer los asientos: no modifica la contabilidad.")
+            if ajustados:
+                rep.notas.append(f"En {ajustados} asientos se ajustó el redondeo (centésimos) en la línea mayor "
+                                 "para que el Debe siga igual al Haber.")
+        return rep
+
+    def mayor(self, emp, cuenta_id, desde=None, hasta=None, en_moneda=False):
+        desde, hasta = _f(desde), _f(hasta)
+        if en_moneda:
+            return self.mayor_me(emp, cuenta_id, desde, hasta)
+        cta = self.cuenta(cuenta_id)
+        mapa = self.mapa_cuentas(emp)
+        ids = [i for i, c in mapa.items() if c["codigo"].startswith(cta["codigo"]) and c["imputable"]]
+        nat = cta["naturaleza"]
+        rep = Reporte(f"Mayor de {cta['codigo']} {cta['nombre']}",
+                      self._subtitulo(emp, self._texto_periodo(desde, hasta)
+                                      + f" · Saldo normal: {'Deudor' if nat == 'D' else 'Acreedor'}"),
+                      [("Fecha", "fecha", 11), ("Asiento", "texto", 8), ("Cuenta", "texto", 26),
+                       ("Concepto", "texto", 30), ("Debe", "importe", 15), ("Haber", "importe", 15),
+                       ("Saldo", "importe", 15), ("D/A", "texto", 4)])
+        if not ids:
+            rep.notas.append("El rubro no tiene cuentas con movimiento.")
+            return rep
+        marcas = ",".join("?" * len(ids))
+        saldo = 0
+        if desde:
+            r = self.con.execute(
+                f"SELECT COALESCE(SUM(m.debe-m.haber),0) FROM movimientos m JOIN asientos a "
+                f"ON a.id=m.asiento_id WHERE m.cuenta_id IN ({marcas}) AND a.fecha<?", ids + [desde]).fetchone()
+            saldo = r[0]
+            rep.agregar(["", "", "", "Saldo anterior", None, None, abs(saldo), self._da(saldo)], "subtitulo")
+        sql = (f"SELECT a.fecha, a.numero, a.concepto AS cab, m.concepto, m.debe, m.haber, c.codigo, c.nombre, "
+               f"t.codigo AS ter_cod FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+               f"JOIN cuentas c ON c.id=m.cuenta_id LEFT JOIN terceros t ON t.id=m.tercero_id "
+               f"WHERE m.cuenta_id IN ({marcas})")
+        par = list(ids)
+        if desde:
+            sql += " AND a.fecha>=?"
+            par.append(desde)
+        if hasta:
+            sql += " AND a.fecha<=?"
+            par.append(hasta)
+        td = th = 0
+        for r in self.con.execute(sql + " ORDER BY a.fecha, a.numero, m.orden", par):
+            saldo += r["debe"] - r["haber"]
+            td += r["debe"]
+            th += r["haber"]
+            rep.agregar([fmt_fecha(r["fecha"]), str(r["numero"]), f"{r['codigo']} {r['nombre']}",
+                         (r["concepto"] or r["cab"]) + (f" · {r['ter_cod']}" if r["ter_cod"] else ""),
+                         r["debe"] or None, r["haber"] or None,
+                         abs(saldo), self._da(saldo)])
+        rep.agregar(["", "", "", "TOTALES Y SALDO FINAL", td, th, abs(saldo), self._da(saldo)], "total")
+        if (saldo > 0 and nat == "A") or (saldo < 0 and nat == "D"):
+            rep.notas.append("Atención: el saldo es contrario a la naturaleza de la cuenta. "
+                             "Revise los asientos (por ejemplo, una Caja no puede tener saldo acreedor).")
+        return rep
+
+    def mayor_me(self, emp, cuenta_id, desde=None, hasta=None):
+        """Mayor con columnas en moneda extranjera y en moneda nacional."""
+        cta = self.cuenta(cuenta_id)
+        hojas = self.con.execute("SELECT id, moneda FROM cuentas WHERE empresa_id=? AND imputable=1 AND "
+                                 "codigo LIKE ?", (emp, cta["codigo"] + "%")).fetchall()
+        monedas = {h["moneda"] for h in hojas if h["moneda"]}
+        if not monedas:
+            raise ErrorContable(f"{cta['codigo']} {cta['nombre']} no tiene cuentas en moneda extranjera. "
+                                "Asigne la moneda en el plan de cuentas.")
+        if len(monedas) > 1:
+            raise ErrorContable("El rubro incluye cuentas en distintas monedas; consulte cada cuenta por separado.")
+        mon = monedas.pop()
+        ids = [h["id"] for h in hojas if h["moneda"] == mon]
+        nat = cta["naturaleza"]
+        sg = 1 if nat == "D" else -1
+        rep = Reporte(f"Mayor de {cta['codigo']} {cta['nombre']} en {mon} y pesos",
+                      self._subtitulo(emp, self._texto_periodo(desde, hasta)
+                                      + f" · Saldo normal: {'Deudor' if nat == 'D' else 'Acreedor'}"),
+                      [("Fecha", "fecha", 10), ("Asiento", "texto", 7), ("Concepto", "texto", 30),
+                       ("TC", "texto", 8), (f"Debe {mon}", "importe", 13), (f"Haber {mon}", "importe", 13),
+                       (f"Saldo {mon}", "importe", 13), ("Debe $", "importe", 14), ("Haber $", "importe", 14),
+                       ("Saldo $", "importe", 14)])
+        marcas = ",".join("?" * len(ids))
+        me_expr = "CASE WHEN m.debe>0 THEN COALESCE(m.importe_me,0) ELSE -COALESCE(m.importe_me,0) END"
+        s_me = s_p = 0
+        if desde:
+            r = self.con.execute(f"SELECT COALESCE(SUM({me_expr}),0), COALESCE(SUM(m.debe-m.haber),0) "
+                                 f"FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+                                 f"WHERE m.cuenta_id IN ({marcas}) AND a.fecha<?", ids + [desde]).fetchone()
+            s_me, s_p = r[0], r[1]
+            rep.agregar(["", "", "Saldo anterior", "", None, None, sg * s_me, None, None, sg * s_p], "subtitulo")
+        sql = (f"SELECT a.fecha, a.numero, a.concepto AS cab, m.*, r.numero AS ref_numero FROM movimientos m "
+               f"JOIN asientos a ON a.id=m.asiento_id LEFT JOIN asientos r ON r.id=m.ref_asiento_id "
+               f"WHERE m.cuenta_id IN ({marcas})")
+        par = list(ids)
+        if desde:
+            sql += " AND a.fecha>=?"
+            par.append(desde)
+        if hasta:
+            sql += " AND a.fecha<=?"
+            par.append(hasta)
+        t = [0, 0, 0, 0]
+        for m in self.con.execute(sql + " ORDER BY a.fecha, a.numero, m.orden", par):
+            me = m["importe_me"] or 0
+            dme, hme = (me, 0) if m["debe"] else (0, me)
+            s_me += dme - hme
+            s_p += m["debe"] - m["haber"]
+            for k, v in enumerate((dme, hme, m["debe"], m["haber"])):
+                t[k] += v
+            conc = m["concepto"] or m["cab"]
+            if m["ref_numero"]:
+                conc += f" (cancela As. {m['ref_numero']})"
+            rep.agregar([fmt_fecha(m["fecha"]), str(m["numero"]), conc,
+                         fmt_tc(m["tipo_cambio"]) if me else "ajuste", dme or None, hme or None, sg * s_me,
+                         m["debe"] or None, m["haber"] or None, sg * s_p])
+        rep.agregar(["", "", "TOTALES Y SALDO FINAL", "", t[0], t[1], sg * s_me, t[2], t[3], sg * s_p], "total")
+        if s_me:
+            rep.notas.append(f"Tipo de cambio promedio del saldo: {fmt_tc(s_p / s_me)} pesos por {mon}.")
+        rep.notas.append("Los saldos se muestran del lado de la naturaleza de la cuenta; entre paréntesis, "
+                         "saldo contrario. «ajuste» = diferencia de cambio que solo mueve pesos.")
+        return rep
+
+    @staticmethod
+    def _da(saldo):
+        return "D" if saldo > 0 else ("A" if saldo < 0 else "")
+
+    @staticmethod
+    def _texto_periodo(desde, hasta):
+        if desde and hasta:
+            return f"Período del {fmt_fecha(desde)} al {fmt_fecha(hasta)}"
+        if hasta:
+            return f"Hasta el {fmt_fecha(hasta)}"
+        if desde:
+            return f"Desde el {fmt_fecha(desde)}"
+        return "Todos los movimientos"
+
+    def balance_comprobacion(self, emp, desde=None, hasta=None, nivel=None, local_id=None, cc_id=None):
+        desde, hasta = _f(desde), _f(hasta)
+        mapa = self.mapa_cuentas(emp)
+        sumas = self.sumas(emp, desde, hasta, local_id, cc_id)
+        max_nivel = max((c["nivel"] for c in mapa.values()), default=1)
+        nivel = nivel or max_nivel
+        agreg = {}
+        for cid, (d, h) in sumas.items():
+            c = mapa[cid]
+            # se acumula en la cuenta y en todos sus rubros superiores hasta el nivel pedido
+            while c:
+                if c["nivel"] <= nivel:
+                    a = agreg.setdefault(c["id"], [0, 0])
+                    a[0] += d
+                    a[1] += h
+                c = mapa.get(c["padre_id"])
+        rep = Reporte("Balance de comprobación de sumas y saldos",
+                      self._subtitulo(emp, self._texto_periodo(desde, hasta) + self._filtros_texto(local_id, cc_id)),
+                      [("Código", "texto", 10), ("Cuenta", "texto", 38), ("Sumas Debe", "importe", 16),
+                       ("Sumas Haber", "importe", 16), ("Saldo deudor", "importe", 16),
+                       ("Saldo acreedor", "importe", 16)])
+        tot = [0, 0, 0, 0]
+        alertas = []
+        for cid in sorted(agreg, key=lambda i: mapa[i]["codigo"]):
+            c = mapa[cid]
+            d, h = agreg[cid]
+            sd, sa = max(d - h, 0), max(h - d, 0)
+            hoja = c["imputable"] or c["nivel"] == nivel
+            estilo = "normal" if hoja else "subtotal"
+            if hoja and ((sd and c["naturaleza"] == "A") or (sa and c["naturaleza"] == "D")):
+                estilo = "alerta"
+                alertas.append(f"{c['codigo']} {c['nombre']}")
+            rep.agregar([c["codigo"], c["nombre"], d, h, sd or None, sa or None], estilo, c["nivel"] - 1)
+            if hoja:
+                tot[0] += d
+                tot[1] += h
+                tot[2] += sd
+                tot[3] += sa
+        rep.agregar(["", "TOTALES", *tot], "total")
+        if tot[0] == tot[1] and tot[2] == tot[3]:
+            rep.notas.append("Control: las sumas del Debe y del Haber coinciden, y también los saldos "
+                             "deudores y acreedores. La partida doble se cumple.")
+        elif local_id or cc_id:
+            rep.notas.append("Con filtro por local o centro de costos los totales pueden no coincidir: "
+                             "cada asiento balancea en total, no necesariamente dentro de cada local o centro.")
+        else:
+            rep.notas.append("ERROR: los totales no coinciden.")
+        if alertas:
+            rep.notas.append("Cuentas con saldo contrario a su naturaleza (revisar): " + "; ".join(alertas))
+        return rep
+
+    def _saldos_por_seccion(self, emp, mapa, sumas, nivel_detalle, secciones):
+        """Devuelve {seccion: {cuenta_agrupadora_id: saldo}} con signo según la sección."""
+        out = {}
+        for cid, (d, h) in sumas.items():
+            c = mapa[cid]
+            sec = c["seccion_ef"]
+            if sec not in secciones:
+                continue
+            if sec in ("AC", "ANC") or sec in SECCIONES_GASTO or sec == "ORD" and c["naturaleza"] == "D":
+                saldo = d - h
+            else:
+                saldo = h - d
+            if sec in SECCIONES_GASTO:
+                saldo = -saldo      # gastos se muestran restando
+            g = self._ancestro(mapa, c, nivel_detalle)
+            out.setdefault(sec, {}).setdefault(g["id"], 0)
+            out[sec][g["id"]] += saldo
+        return out
+
+    def _filtros_texto(self, local_id, cc_id):
+        t = []
+        if local_id:
+            loc = self.con.execute("SELECT * FROM locales WHERE id=?", (local_id,)).fetchone()
+            t.append(f"Local: {loc['codigo']} {loc['nombre']}")
+        if cc_id == SIN_ASIGNAR:
+            t.append("Movimientos sin centro de costos")
+        elif cc_id:
+            cc = self.con.execute("SELECT * FROM centros_costo WHERE id=?", (cc_id,)).fetchone()
+            t.append(f"Centro de costos: {cc['codigo']} {cc['nombre']}")
+        return (" · " + " · ".join(t)) if t else ""
+
+    def resultado_periodo(self, emp, desde=None, hasta=None, local_id=None, cc_id=None):
+        mapa = self.mapa_cuentas(emp)
+        res = 0
+        for cid, (d, h) in self.sumas(emp, desde, hasta, local_id, cc_id).items():
+            if mapa[cid]["seccion_ef"] in SECCIONES_ER:
+                res += h - d
+        return res
+
+    def estado_situacion(self, emp, fecha, nivel_detalle=3, local_id=None, cc_id=None):
+        fecha = parse_fecha(fecha)
+        mapa = self.mapa_cuentas(emp)
+        sumas = self.sumas(emp, None, fecha, local_id, cc_id)
+        datos = self._saldos_por_seccion(emp, mapa, sumas, nivel_detalle,
+                                         {"AC", "ANC", "PC", "PNC", "PAT", "ORD"})
+        rep = Reporte("Estado de Situación Financiera",
+                      self._subtitulo(emp, f"Al {fmt_fecha(fecha)} · {self.texto_cifras(emp)}"
+                                      + self._filtros_texto(local_id, cc_id)),
+                      [("Concepto", "texto", 50), ("Parcial", "importe", 18), ("Total", "importe", 18)])
+
+        def bloque(sec):
+            rep.agregar([pm.SECCIONES[sec], None, None], "subtitulo", 1)
+            total = 0
+            for gid in sorted(datos.get(sec, {}), key=lambda i: mapa[i]["codigo"]):
+                v = datos[sec][gid]
+                if v:
+                    rep.agregar([mapa[gid]["nombre"], v, None], "normal", 2)
+                    total += v
+            rep.agregar([f"Total {pm.SECCIONES[sec].lower()}", None, total], "subtotal", 1)
+            return total
+
+        totales = {}
+        for nombre, secs in SECCIONES_ESF:
+            rep.agregar([nombre, None, None], "titulo")
+            totales[nombre] = sum(bloque(s) for s in secs)
+            rep.agregar([f"TOTAL {nombre}", None, totales[nombre]], "total")
+
+        rep.agregar(["PATRIMONIO", None, None], "titulo")
+        tot_pat = 0
+        for gid in sorted(datos.get("PAT", {}), key=lambda i: mapa[i]["codigo"]):
+            v = datos["PAT"][gid]
+            if v:
+                rep.agregar([mapa[gid]["nombre"], v, None], "normal", 2)
+                tot_pat += v
+        res = self.resultado_periodo(emp, None, fecha, local_id, cc_id)
+        rep.agregar(["Resultado del ejercicio (según Estado de Resultados)", res, None], "normal", 2)
+        tot_pat += res
+        rep.agregar(["TOTAL PATRIMONIO", None, tot_pat], "total")
+        rep.agregar(["TOTAL PASIVO Y PATRIMONIO", None, totales["PASIVO"] + tot_pat], "total")
+
+        if datos.get("ORD"):
+            rep.agregar(["CUENTAS DE ORDEN", None, None], "titulo")
+            for gid in sorted(datos["ORD"], key=lambda i: mapa[i]["codigo"]):
+                if datos["ORD"][gid]:
+                    rep.agregar([mapa[gid]["nombre"], datos["ORD"][gid], None], "normal", 2)
+            rep.notas.append("Las cuentas de orden no integran el activo ni el pasivo: "
+                             "se exponen por separado, como información complementaria.")
+
+        dif = totales["ACTIVO"] - totales["PASIVO"] - tot_pat
+        if dif == 0:
+            rep.notas.append("Control: Activo = Pasivo + Patrimonio. La ecuación patrimonial se cumple.")
+        elif local_id or cc_id:
+            rep.notas.append(f"Con filtro por local o centro de costos la ecuación patrimonial puede no "
+                             f"cerrar (diferencia {fmt_importe(dif)}): cada asiento balancea en total, "
+                             "no necesariamente dentro de cada local o centro.")
+        else:
+            rep.notas.append(f"ERROR: Activo − (Pasivo + Patrimonio) = {fmt_importe(dif)}. Revise las "
+                             "secciones asignadas a las cuentas en el plan de cuentas.")
+        return rep
+
+    def estado_resultados(self, emp, desde, hasta, nivel_detalle=3, local_id=None, cc_id=None):
+        desde, hasta = parse_fecha(desde), parse_fecha(hasta)
+        mapa = self.mapa_cuentas(emp)
+        sumas = self.sumas(emp, desde, hasta, local_id, cc_id)
+        datos = self._saldos_por_seccion(emp, mapa, sumas, nivel_detalle, SECCIONES_ER)
+        rep = Reporte("Estado de Resultados",
+                      self._subtitulo(emp, f"Por el período del {fmt_fecha(desde)} al {fmt_fecha(hasta)}"
+                                      f" · {self.texto_cifras(emp)} · Gastos por función"
+                                      + self._filtros_texto(local_id, cc_id)),
+                      [("Concepto", "texto", 50), ("Parcial", "importe", 18), ("Total", "importe", 18)])
+
+        def bloque(sec):
+            items = [(gid, v) for gid, v in datos.get(sec, {}).items() if v]
+            total = sum(v for _, v in items)
+            rep.agregar([pm.SECCIONES[sec], None, total], "subtitulo", 0)
+            for gid, v in sorted(items, key=lambda x: mapa[x[0]]["codigo"]):
+                rep.agregar([mapa[gid]["nombre"], v, None], "normal", 2)
+            return total
+
+        acum = bloque("ING") + bloque("CV")
+        rep.agregar(["GANANCIA BRUTA", None, acum], "total")
+        for s in ("OI", "GD", "GA", "OG"):
+            acum += bloque(s)
+        rep.agregar(["RESULTADO DE ACTIVIDADES DE OPERACIÓN", None, acum], "total")
+        acum += bloque("IF") + bloque("CF")
+        rep.agregar(["RESULTADO ANTES DEL IMPUESTO A LA RENTA", None, acum], "total")
+        acum += bloque("IR")
+        rep.agregar(["RESULTADO DEL EJERCICIO", None, acum], "total")
+        rep.notas.append("Las cifras entre paréntesis restan (costos y gastos).")
+        rep.notas.append("Ganancia si el resultado es positivo; pérdida si aparece entre paréntesis.")
+        return rep
+
+    def estado_resultados_por(self, emp, dimension, desde, hasta, nivel_detalle=3):
+        """Estado de resultados con una columna por centro de costos (dimension='cc') o por local
+        (dimension='local'), más «Sin asignar» y el total de la empresa."""
+        desde, hasta = parse_fecha(desde), parse_fecha(hasta)
+        mapa = self.mapa_cuentas(emp)
+        por_dim = self.sumas_por_dimension(emp, dimension, desde, hasta)
+        items = self.centros_costo(emp) if dimension == "cc" else self.locales(emp)
+        columnas = [(it["id"], it["codigo"]) for it in items if it["activo"] or it["id"] in por_dim]
+        if None in por_dim:
+            columnas.append((None, "Sin asignar"))
+        if not columnas:
+            raise ErrorContable("La empresa no tiene centros de costos cargados." if dimension == "cc"
+                                else "La empresa no tiene locales cargados.")
+        datos = [self._saldos_por_seccion(emp, mapa, por_dim.get(cid, {}), nivel_detalle, SECCIONES_ER)
+                 for cid, _ in columnas]
+        nombre_dim = "centro de costos" if dimension == "cc" else "local"
+        rep = Reporte(f"Estado de Resultados por {nombre_dim}",
+                      self._subtitulo(emp, f"Por el período del {fmt_fecha(desde)} al {fmt_fecha(hasta)}"
+                                      f" · {self.texto_cifras(emp)} · Gastos por función"),
+                      [("Concepto", "texto", 40)] + [(cod, "importe", 14) for _, cod in columnas]
+                      + [("Total", "importe", 15)])
+        acum = [0] * len(columnas)
+
+        def fila(texto, valores, estilo, nivel=0):
+            rep.agregar([texto, *valores, sum(valores)], estilo, nivel)
+
+        def bloque(sec):
+            tot = [sum(d.get(sec, {}).values()) for d in datos]
+            fila(pm.SECCIONES[sec], tot, "subtitulo")
+            grupos = sorted({g for d in datos for g, v in d.get(sec, {}).items() if v},
+                            key=lambda g: mapa[g]["codigo"])
+            for g in grupos:
+                fila(mapa[g]["nombre"], [d.get(sec, {}).get(g, 0) for d in datos], "normal", 2)
+            for k, v in enumerate(tot):
+                acum[k] += v
+
+        for sec in ("ING", "CV"):
+            bloque(sec)
+        fila("GANANCIA BRUTA", list(acum), "total")
+        for sec in ("OI", "GD", "GA", "OG"):
+            bloque(sec)
+        fila("RESULTADO DE ACTIVIDADES DE OPERACIÓN", list(acum), "total")
+        for sec in ("IF", "CF"):
+            bloque(sec)
+        fila("RESULTADO ANTES DEL IMPUESTO A LA RENTA", list(acum), "total")
+        bloque("IR")
+        fila("RESULTADO DEL EJERCICIO", list(acum), "total")
+        nombres = "; ".join(f"{it['codigo']} = {it['nombre']}" for it in items if it["id"] in dict(columnas))
+        rep.notas.append(f"Columnas: {nombres}." if nombres else "")
+        if None in por_dim:
+            rep.notas.append(f"«Sin asignar» reúne los movimientos registrados sin {nombre_dim}. La columna "
+                             "Total coincide con el Estado de Resultados de toda la empresa.")
+        rep.notas.append("Las cifras entre paréntesis restan (costos y gastos).")
+        rep.notas = [n for n in rep.notas if n]
+        return rep

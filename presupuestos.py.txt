@@ -1,0 +1,593 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Presupuestos y control presupuestario.
+
+- Un presupuesto es una versión o escenario (normal, pesimista, optimista...) de 12 meses.
+- Cada línea es una cuenta de resultados (de cualquier nivel), opcionalmente con centro de costos
+  y local, con un importe por mes en sentido natural: ingreso esperado o gasto esperado.
+- El presupuesto general de la empresa es la SUMA de todas las líneas (suma de las partes).
+- Comparación: desvío = real − presupuesto; desvío % = (real − presupuesto) / presupuesto × 100.
+  En ingresos un desvío positivo es favorable; en gastos, desfavorable.
+- Si la fecha de corte cae a mitad de mes, el presupuesto de ese mes se toma en proporción a los
+  días transcurridos (criterio de devengamiento lineal).
+"""
+import calendar
+import datetime as _dt
+
+from . import plan_modelo as pm
+from .base import (SECCIONES_ER, SECCIONES_GASTO, SIN_ASIGNAR, ErrorContable, Reporte, fmt_fecha,
+                   fmt_importe, parse_fecha)
+
+PERIODICIDADES = {"mensual": 1, "trimestral": 3, "semestral": 6, "anual": 12}
+NOMBRE_PERIODO = {1: "Mes", 3: "Trimestre", 6: "Semestre", 12: "Año"}
+MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"]
+ORDEN_ER = [("ING", None), ("CV", None), ("GANANCIA BRUTA", "res"), ("OI", None), ("GD", None), ("GA", None),
+            ("OG", None), ("RESULTADO DE ACTIVIDADES DE OPERACIÓN", "res"), ("IF", None), ("CF", None),
+            ("RESULTADO ANTES DEL IMPUESTO A LA RENTA", "res"), ("IR", None), ("RESULTADO DEL EJERCICIO", "res")]
+
+
+# ------------------------------------------------------------------ utilidades
+def _fecha(iso):
+    return _dt.date.fromisoformat(iso.strip())
+
+
+def meses_de(inicio_iso):
+    """Lista de 12 tuplas (n, primer_día, último_día) a partir del mes de inicio."""
+    d = _fecha(inicio_iso).replace(day=1)
+    out = []
+    for n in range(1, 13):
+        ultimo = d.replace(day=calendar.monthrange(d.year, d.month)[1])
+        out.append((n, d, ultimo))
+        d = ultimo + _dt.timedelta(days=1)
+    return out
+
+
+def etiqueta_mes(inicio_iso, n):
+    _, d, _ = meses_de(inicio_iso)[n - 1]
+    return f"{MESES[d.month - 1]} {d.year % 100:02d}"
+
+
+def repartir(total, partes=12):
+    """Reparte un importe (centésimos) en partes iguales; el redondeo va al último mes."""
+    base = int(total / partes)
+    out = [base] * partes
+    out[-1] = total - base * (partes - 1)
+    return out
+
+
+def es_regularizadora(c):
+    """Cuenta de resultados con saldo normal contrario al de su sección (ej.: devoluciones sobre ventas)."""
+    gasto = c["seccion_ef"] in SECCIONES_GASTO
+    return (c["naturaleza"] == "D" and not gasto) or (c["naturaleza"] == "A" and gasto)
+
+
+def fmt_pct(valor_real, presup, resultado=False):
+    """(real − presupuesto) / |presupuesto| × 100. Se divide por el valor absoluto para que el signo del
+    porcentaje coincida con el del desvío también en resultados negativos y cuentas regularizadoras."""
+    if not presup:
+        return "s/p"
+    den = abs(presup)
+    v = (valor_real - presup) / den * 100
+    return f"{v:+.1f} %".replace(".", ",")
+
+
+def calificar(dif, tipo):
+    """Favorable / Desfavorable según el tipo de línea: ingreso o resultado (más es mejor) o gasto."""
+    if dif == 0:
+        return "—"
+    mejor = dif > 0 if tipo != "gas" else dif < 0
+    return "Favorable" if mejor else "Desfavorable"
+
+
+class PresupuestosMixin:
+    """Métodos de presupuestos (se integran a Contabilidad)."""
+
+    # -------------------------------------------------------------- versiones
+    def presupuestos(self, emp):
+        return self.con.execute("SELECT * FROM presupuestos WHERE empresa_id=? ORDER BY inicio DESC, nombre",
+                                (emp,)).fetchall()
+
+    def presupuesto(self, pid):
+        p = self.con.execute("SELECT * FROM presupuestos WHERE id=?", (pid,)).fetchone()
+        if not p:
+            raise ErrorContable("El presupuesto no existe.")
+        return p
+
+    def _inicio_por_defecto(self, emp):
+        e = self.empresa(emp)
+        if e["inicio_ejercicio"]:
+            return _fecha(e["inicio_ejercicio"]).replace(day=1).isoformat()
+        return _dt.date(_dt.date.today().year, 1, 1).isoformat()
+
+    @staticmethod
+    def _parse_inicio(texto):
+        t = (texto or "").strip()
+        if t.count("/") == 1:          # mm/aaaa
+            t = "01/" + t
+        return _fecha(parse_fecha(t)).replace(day=1).isoformat()
+
+    def crear_presupuesto(self, emp, nombre, inicio=None, descripcion="", origen="manual"):
+        nombre = (nombre or "").strip()
+        if not nombre:
+            raise ErrorContable("Indique un nombre para el presupuesto (por ejemplo «2026 Normal»).")
+        if self.con.execute("SELECT 1 FROM presupuestos WHERE empresa_id=? AND nombre=?", (emp, nombre)).fetchone():
+            raise ErrorContable(f"Ya existe un presupuesto llamado «{nombre}».")
+        inicio = self._parse_inicio(inicio) if inicio else self._inicio_por_defecto(emp)
+        with self.con:
+            return self.con.execute("INSERT INTO presupuestos(empresa_id,nombre,inicio,descripcion,origen) "
+                                    "VALUES (?,?,?,?,?)", (emp, nombre, inicio, descripcion or "", origen)).lastrowid
+
+    def modificar_presupuesto(self, pid, nombre, descripcion=""):
+        p = self.presupuesto(pid)
+        nombre = (nombre or "").strip()
+        if not nombre:
+            raise ErrorContable("El presupuesto necesita un nombre.")
+        if self.con.execute("SELECT 1 FROM presupuestos WHERE empresa_id=? AND nombre=? AND id<>?",
+                            (p["empresa_id"], nombre, pid)).fetchone():
+            raise ErrorContable(f"Ya existe un presupuesto llamado «{nombre}».")
+        with self.con:
+            self.con.execute("UPDATE presupuestos SET nombre=?, descripcion=? WHERE id=?", (nombre, descripcion, pid))
+
+    def eliminar_presupuesto(self, pid):
+        with self.con:
+            self.con.execute("DELETE FROM presupuesto_items WHERE presupuesto_id=?", (pid,))
+            self.con.execute("DELETE FROM presupuestos WHERE id=?", (pid,))
+
+    # ----------------------------------------------------------------- líneas
+    def lineas_presupuesto(self, pid):
+        """Lista de dict(cuenta_id, cc_id, local_id, importes[12]) ordenada por código de cuenta."""
+        filas = self.con.execute(
+            "SELECT i.*, c.codigo FROM presupuesto_items i JOIN cuentas c ON c.id=i.cuenta_id "
+            "WHERE presupuesto_id=? ORDER BY c.codigo, i.cc_id, i.local_id, i.mes", (pid,)).fetchall()
+        out = {}
+        for f in filas:
+            k = (f["cuenta_id"], f["cc_id"], f["local_id"])
+            if k not in out:
+                out[k] = dict(cuenta_id=k[0], cc_id=k[1], local_id=k[2], codigo=f["codigo"], importes=[0] * 12)
+            out[k]["importes"][f["mes"] - 1] = f["importe"]
+        return list(out.values())
+
+    def _validar_linea(self, p, cuenta_id, cc_id, local_id):
+        emp = p["empresa_id"]
+        mapa = self.mapa_cuentas(emp)
+        c = mapa.get(cuenta_id)
+        if not c:
+            raise ErrorContable("La cuenta no pertenece a esta empresa.")
+        if c["seccion_ef"] not in SECCIONES_ER or c["nivel"] == 1:
+            raise ErrorContable(f"{c['codigo']} {c['nombre']}: solo se presupuestan cuentas o rubros de ingresos "
+                                "y gastos (grupos 4 y 5), a partir del segundo nivel.")
+        self._validar_dims(emp, local_id, cc_id)
+        # no se puede presupuestar a la vez un rubro y sus subcuentas (con el mismo centro y local)
+        for f in self.con.execute("SELECT DISTINCT cuenta_id FROM presupuesto_items WHERE presupuesto_id=? "
+                                  "AND IFNULL(cc_id,0)=? AND IFNULL(local_id,0)=? AND cuenta_id<>?",
+                                  (p["id"], cc_id or 0, local_id or 0, cuenta_id)):
+            otra = mapa[f[0]]
+            if otra["codigo"].startswith(c["codigo"]) or c["codigo"].startswith(otra["codigo"]):
+                raise ErrorContable(f"Ya hay importes en {otra['codigo']} {otra['nombre']}. No se puede presupuestar "
+                                    f"a la vez un rubro y sus subcuentas: se contaría dos veces.")
+        return c
+
+    def guardar_linea(self, pid, cuenta_id, importes, cc_id=None, local_id=None):
+        """Importes mensuales en centésimos y en positivo. En una cuenta regularizadora (por ejemplo,
+        Devoluciones sobre ventas) se guardan en negativo, porque restan de su sección."""
+        p = self.presupuesto(pid)
+        if len(importes) != 12:
+            raise ErrorContable("Se necesitan los 12 importes mensuales.")
+        c = self._validar_linea(p, cuenta_id, cc_id, local_id)
+        if es_regularizadora(c):
+            # devoluciones, bonificaciones…: restan de su sección. Se cargan en positivo y se guardan en negativo
+            importes = [-abs(int(v)) for v in importes]
+        with self.con:
+            self.con.execute("DELETE FROM presupuesto_items WHERE presupuesto_id=? AND cuenta_id=? "
+                             "AND IFNULL(cc_id,0)=? AND IFNULL(local_id,0)=?",
+                             (pid, cuenta_id, cc_id or 0, local_id or 0))
+            self.con.executemany(
+                "INSERT INTO presupuesto_items(presupuesto_id,cuenta_id,cc_id,local_id,mes,importe) VALUES (?,?,?,?,?,?)",
+                [(pid, cuenta_id, cc_id, local_id, n, int(v)) for n, v in enumerate(importes, 1) if v])
+
+    def eliminar_linea(self, pid, cuenta_id, cc_id=None, local_id=None):
+        with self.con:
+            self.con.execute("DELETE FROM presupuesto_items WHERE presupuesto_id=? AND cuenta_id=? "
+                             "AND IFNULL(cc_id,0)=? AND IFNULL(local_id,0)=?",
+                             (pid, cuenta_id, cc_id or 0, local_id or 0))
+
+    def totales_presupuesto(self, pid):
+        """(ingresos, gastos, resultado) anuales del presupuesto completo."""
+        p = self.presupuesto(pid)
+        mapa = self.mapa_cuentas(p["empresa_id"])
+        ing = gas = 0
+        for cid, imp in self.con.execute("SELECT cuenta_id, SUM(importe) FROM presupuesto_items "
+                                         "WHERE presupuesto_id=? GROUP BY cuenta_id", (pid,)):
+            if mapa[cid]["seccion_ef"] in SECCIONES_GASTO:
+                gas += imp
+            else:
+                ing += imp
+        return ing, gas, ing - gas
+
+    # ------------------------------------------------------------ generadores
+    def copiar_presupuesto(self, pid, nombre, pct_ingresos=0.0, pct_gastos=0.0):
+        """Nuevo escenario a partir de otro, ajustando ingresos y gastos en un porcentaje."""
+        p = self.presupuesto(pid)
+        mapa = self.mapa_cuentas(p["empresa_id"])
+        nuevo = self.crear_presupuesto(p["empresa_id"], nombre, None, "", f"copia de «{p['nombre']}» "
+                                       f"(ingresos {pct_ingresos:+g} %, gastos {pct_gastos:+g} %)")
+        with self.con:
+            self.con.execute("UPDATE presupuestos SET inicio=? WHERE id=?", (p["inicio"], nuevo))
+            for f in self.con.execute("SELECT * FROM presupuesto_items WHERE presupuesto_id=?", (pid,)).fetchall():
+                pct = pct_gastos if mapa[f["cuenta_id"]]["seccion_ef"] in SECCIONES_GASTO else pct_ingresos
+                self.con.execute("INSERT INTO presupuesto_items(presupuesto_id,cuenta_id,cc_id,local_id,mes,importe) "
+                                 "VALUES (?,?,?,?,?,?)", (nuevo, f["cuenta_id"], f["cc_id"], f["local_id"], f["mes"],
+                                                          round(f["importe"] * (1 + pct / 100))))
+        return nuevo
+
+    def _real_por_clave(self, emp, desde, hasta):
+        """{(cuenta_id, cc_id, local_id): natural} de las cuentas de resultados en el rango.
+        Con un solo local, el local se deja vacío."""
+        un_local = len(self.locales(emp)) <= 1
+        mapa = self.mapa_cuentas(emp)
+        out = {}
+        for cid, cc, loc, d, h in self.con.execute(
+                "SELECT m.cuenta_id, m.cc_id, COALESCE(m.local_id, a.local_id), SUM(m.debe), SUM(m.haber) "
+                "FROM movimientos m JOIN asientos a ON a.id=m.asiento_id WHERE a.empresa_id=? "
+                "AND a.fecha BETWEEN ? AND ? GROUP BY 1, 2, 3", (emp, desde, hasta)):
+            sec = mapa[cid]["seccion_ef"]
+            if sec not in SECCIONES_ER:
+                continue
+            nat = d - h if sec in SECCIONES_GASTO else h - d
+            k = (cid, cc, None if un_local else loc)
+            out[k] = out.get(k, 0) + nat
+        return out
+
+    def presupuesto_desde_real(self, emp, nombre, desde_real, inicio=None, pct_ingresos=0.0, pct_gastos=0.0):
+        """Nuevo presupuesto con lo real de 12 meses (desde 'desde_real'), mes a mes, ajustado en %."""
+        desde_real = _fecha(self._parse_inicio(desde_real))
+        meses_r = meses_de(desde_real.isoformat())
+        pid = self.crear_presupuesto(emp, nombre, inicio, "", f"real desde {fmt_fecha(desde_real.isoformat())} "
+                                     f"(ingresos {pct_ingresos:+g} %, gastos {pct_gastos:+g} %)")
+        mapa = self.mapa_cuentas(emp)
+        lineas = {}
+        for n, d1, d2 in meses_r:
+            for k, v in self._real_por_clave(emp, d1.isoformat(), d2.isoformat()).items():
+                pct = pct_gastos if mapa[k[0]]["seccion_ef"] in SECCIONES_GASTO else pct_ingresos
+                lineas.setdefault(k, [0] * 12)[n - 1] += round(v * (1 + pct / 100))
+        with self.con:
+            for (cid, cc, loc), imps in lineas.items():
+                self.con.executemany(
+                    "INSERT INTO presupuesto_items(presupuesto_id,cuenta_id,cc_id,local_id,mes,importe) "
+                    "VALUES (?,?,?,?,?,?)", [(pid, cid, cc, loc, n, v) for n, v in enumerate(imps, 1) if v])
+        if not lineas:
+            raise ErrorContable("No hay movimientos de ingresos ni gastos en esos 12 meses. El presupuesto se "
+                                "creó vacío: cargue los importes a mano.")
+        return pid
+
+    def guardar_proyeccion(self, pid, fecha, nombre):
+        """Nueva versión: real hasta la fecha + presupuesto de lo que falta del ejercicio (mes a mes)."""
+        p = self.presupuesto(pid)
+        emp = p["empresa_id"]
+        fecha = _fecha(parse_fecha(fecha))
+        meses = meses_de(p["inicio"])
+        mapa = self.mapa_cuentas(emp)
+        claves = {(l["cuenta_id"], l["cc_id"], l["local_id"]): l["importes"] for l in self.lineas_presupuesto(pid)}
+        nuevas = {k: [0] * 12 for k in claves}
+
+        def destino(k):
+            """Línea del presupuesto que corresponde a un importe real (cuenta, centro, local)."""
+            cid, cc, loc = k
+            cod = mapa[cid]["codigo"]
+            mejor = None
+            for (bc, bcc, bloc) in claves:
+                if bcc == cc and (bloc == loc or bloc is None) and cod.startswith(mapa[bc]["codigo"]):
+                    if mejor is None or (bloc == loc and mejor[2] != loc):
+                        mejor = (bc, bcc, bloc)
+            return mejor or k
+
+        for n, d1, d2 in meses:
+            dias = (d2 - d1).days + 1
+            if fecha >= d2:
+                frac_pres = 0.0
+            elif fecha < d1:
+                frac_pres = 1.0
+            else:
+                frac_pres = 1 - ((fecha - d1).days + 1) / dias
+            for k, imps in claves.items():
+                nuevas[k][n - 1] += round(imps[n - 1] * frac_pres)
+            if fecha >= d1:
+                for k, v in self._real_por_clave(emp, d1.isoformat(), min(fecha, d2).isoformat()).items():
+                    nuevas.setdefault(destino(k), [0] * 12)[n - 1] += v
+        nuevo = self.crear_presupuesto(emp, nombre, None, "", f"proyección de «{p['nombre']}»: real al "
+                                       f"{fmt_fecha(fecha.isoformat())} + presupuesto restante")
+        with self.con:
+            self.con.execute("UPDATE presupuestos SET inicio=? WHERE id=?", (p["inicio"], nuevo))
+            for (cid, cc, loc), imps in nuevas.items():
+                self.con.executemany(
+                    "INSERT INTO presupuesto_items(presupuesto_id,cuenta_id,cc_id,local_id,mes,importe) "
+                    "VALUES (?,?,?,?,?,?)", [(nuevo, cid, cc, loc, n, v) for n, v in enumerate(imps, 1) if v])
+        return nuevo
+
+    # ------------------------------------------------- importes por rango
+    def _pres_rango(self, pid, desde, hasta, local_id=None, cc_id=None):
+        """{cuenta_id: importe natural} del presupuesto entre dos fechas (prorrateo diario del mes parcial)."""
+        p = self.presupuesto(pid)
+        d0, d1 = _fecha(desde), _fecha(hasta)
+        sql, par = "SELECT cuenta_id, mes, importe FROM presupuesto_items WHERE presupuesto_id=?", [pid]
+        if cc_id == SIN_ASIGNAR:
+            sql += " AND cc_id IS NULL"
+        elif cc_id:
+            sql += " AND cc_id=?"
+            par.append(cc_id)
+        if local_id:
+            sql += " AND local_id=?"
+            par.append(local_id)
+        fracc = {}
+        for n, a, b in meses_de(p["inicio"]):
+            ini, fin = max(a, d0), min(b, d1)
+            if fin >= ini:
+                fracc[n] = ((fin - ini).days + 1) / ((b - a).days + 1)
+        out = {}
+        for cid, mes, imp in self.con.execute(sql, par):
+            if mes in fracc:
+                out[cid] = out.get(cid, 0) + round(imp * fracc[mes])
+        return out
+
+    def _real_rango(self, emp, desde, hasta, local_id=None, cc_id=None):
+        mapa = self.mapa_cuentas(emp)
+        out = {}
+        for cid, (d, h) in self.sumas(emp, desde, hasta, local_id, cc_id).items():
+            sec = mapa[cid]["seccion_ef"]
+            if sec in SECCIONES_ER:
+                out[cid] = (d - h) if sec in SECCIONES_GASTO else (h - d)
+        return out
+
+    def _agrupador(self, pid, emp, nivel):
+        """Función cuenta_id -> cuenta agrupadora. Si un rubro está presupuestado en conjunto (en un nivel
+        más alto que el de detalle), lo real de sus subcuentas se agrupa en ese rubro para poder comparar."""
+        mapa = self.mapa_cuentas(emp)
+        ids = pid if isinstance(pid, (list, tuple)) else [pid]
+        presup = {r[0] for r in self.con.execute(
+            f"SELECT DISTINCT cuenta_id FROM presupuesto_items WHERE presupuesto_id IN ({','.join('?' * len(ids))})",
+            ids)}
+        cache = {}
+
+        def grupo(cid):
+            if cid in cache:
+                return cache[cid]
+            c, nivel_g = mapa[cid], nivel
+            x = c
+            while x:
+                if x["id"] in presup:
+                    nivel_g = min(nivel_g, x["nivel"])
+                x = mapa.get(x["padre_id"])
+            g = c
+            while g["nivel"] > nivel_g and g["padre_id"]:
+                g = mapa[g["padre_id"]]
+            cache[cid] = g["id"]
+            return g["id"]
+        return grupo, mapa
+
+    def _periodo_de(self, p, fecha, meses_periodo):
+        """(n° de período, inicio del período, fin del período) que contiene la fecha."""
+        meses = meses_de(p["inicio"])
+        f = _fecha(fecha)
+        if f < meses[0][1]:
+            raise ErrorContable(f"La fecha es anterior al inicio del presupuesto ({fmt_fecha(p['inicio'])}).")
+        if f > meses[-1][2]:
+            raise ErrorContable(f"La fecha es posterior al fin del presupuesto ({fmt_fecha(meses[-1][2].isoformat())}).")
+        idx = next(n for n, a, b in meses if a <= f <= b)
+        k = (idx - 1) // meses_periodo
+        return k + 1, meses[k * meses_periodo][1], meses[min(12, (k + 1) * meses_periodo) - 1][2]
+
+    def _filas_er(self, rep, mapa, medidas, fila):
+        """Arma las filas con la estructura del Estado de Resultados.
+        medidas: {(seccion, grupo_id): dict de valores naturales}. fila(texto, valores, tipo, estilo, nivel)."""
+        claves = sorted({k for v in medidas.values() for k in v})
+        acum = dict.fromkeys(claves, 0)
+        for sec, tipo in ORDEN_ER:
+            if tipo == "res":
+                fila(sec, dict(acum), "res", "total", 0)
+                continue
+            es_gasto = sec in SECCIONES_GASTO
+            grupos = sorted([g for (s, g) in medidas if s == sec], key=lambda g: mapa[g]["codigo"])
+            tot = {k: sum(medidas[(sec, g)].get(k, 0) for g in grupos) for k in claves}
+            if not grupos:
+                continue
+            fila(pm.SECCIONES[sec], tot, "gas" if es_gasto else "ing", "subtitulo", 0)
+            for g in grupos:
+                fila(f"{mapa[g]['codigo']} {mapa[g]['nombre']}", medidas[(sec, g)], "gas" if es_gasto else "ing",
+                     "normal", 2)
+            for k in claves:
+                acum[k] += -tot[k] if es_gasto else tot[k]
+
+    def _medidas(self, emp, mapa, grupo, conjuntos):
+        """conjuntos: {nombre_medida: {cuenta_id: natural}} -> {(sección, grupo): {medida: valor}}."""
+        out = {}
+        for medida, datos in conjuntos.items():
+            for cid, v in datos.items():
+                if not v:
+                    continue
+                g = grupo(cid)
+                k = (mapa[cid]["seccion_ef"], g)
+                out.setdefault(k, {})
+                out[k][medida] = out[k].get(medida, 0) + v
+        return out
+
+    def _texto_filtro(self, local_id, cc_id):
+        t = self._filtros_texto(local_id, cc_id)
+        return t if t else " · Total de la empresa (consolidado)"
+
+    # ---------------------------------------------------------------- informes
+    def comparativo_presupuesto(self, emp, pid, fecha, periodicidad="mensual", nivel=3, local_id=None, cc_id=None):
+        """Presupuesto vs real del período que contiene la fecha y acumulado del ejercicio a esa fecha."""
+        p = self.presupuesto(pid)
+        fecha = parse_fecha(fecha)
+        mp = PERIODICIDADES[periodicidad]
+        n, ini_p, _ = self._periodo_de(p, fecha, mp)
+        ini_ej = p["inicio"]
+        grupo, mapa = self._agrupador(pid, emp, nivel)
+        medidas = self._medidas(emp, mapa, grupo, {
+            "pp": self._pres_rango(pid, ini_p.isoformat(), fecha, local_id, cc_id),
+            "rp": self._real_rango(emp, ini_p.isoformat(), fecha, local_id, cc_id),
+            "pa": self._pres_rango(pid, ini_ej, fecha, local_id, cc_id),
+            "ra": self._real_rango(emp, ini_ej, fecha, local_id, cc_id)})
+        nom_p = f"{NOMBRE_PERIODO[mp]} {n}" if mp < 12 else "Ejercicio"
+        rep = Reporte(f"Presupuesto «{p['nombre']}» vs real",
+                      self._subtitulo(emp, f"{nom_p}: del {fmt_fecha(ini_p.isoformat())} al {fmt_fecha(fecha)} · "
+                                      f"Acumulado: del {fmt_fecha(ini_ej)} al {fmt_fecha(fecha)}"
+                                      + self._texto_filtro(local_id, cc_id)),
+                      [("Concepto", "texto", 32),
+                       (f"Presup. {nom_p.lower()}", "importe", 13), ("Real", "importe", 13), ("Desvío", "importe", 13),
+                       ("Desvío %", "texto", 9), ("", "texto", 14),
+                       ("Presup. acum.", "importe", 14), ("Real acum.", "importe", 14), ("Desvío acum.", "importe", 13),
+                       ("Desvío %", "texto", 9), (" ", "texto", 14)])
+
+        def fila(texto, v, tipo, estilo, niv):
+            celdas = [texto]
+            for a, b in (("pp", "rp"), ("pa", "ra")):
+                pres, real = v.get(a, 0), v.get(b, 0)
+                dif = real - pres
+                celdas += [pres, real, dif, fmt_pct(real, pres, tipo == "res"), calificar(dif, tipo)]
+            rep.agregar(celdas, estilo, niv)
+
+        self._filas_er(rep, mapa, medidas, fila)
+        self._notas_presupuesto(rep)
+        return rep
+
+    def _notas_presupuesto(self, rep):
+        rep.notas.append("Desvío = Real − Presupuesto. Desvío % = (Real − Presupuesto) / Presupuesto × 100. "
+                         "En ingresos y resultados un desvío positivo es favorable; en costos y gastos, desfavorable.")
+        rep.notas.append("Ingresos y gastos se muestran en positivo. En las líneas de resultado el porcentaje se "
+                         "calcula sobre el valor absoluto del presupuesto, para que el signo no se invierta si se "
+                         "presupuestó una pérdida. «s/p»: sin presupuesto, el porcentaje no se puede calcular.")
+        rep.notas.append("Si la fecha cae a mitad de mes, el presupuesto de ese mes se toma en proporción a los días "
+                         "transcurridos.")
+
+    def evolucion_presupuesto(self, emp, pid, fecha, periodicidad="mensual", cuenta_id=None, local_id=None,
+                              cc_id=None):
+        """Período por período: presupuesto, real y desvío, con los acumulados del ejercicio."""
+        p = self.presupuesto(pid)
+        fecha = parse_fecha(fecha)
+        mp = PERIODICIDADES[periodicidad]
+        self._periodo_de(p, fecha, mp)
+        mapa = self.mapa_cuentas(emp)
+        if cuenta_id:
+            c = mapa[cuenta_id]
+            if c["seccion_ef"] not in SECCIONES_ER:
+                raise ErrorContable("Elija una cuenta o rubro de ingresos o gastos, o deje vacío para ver el "
+                                    "resultado del ejercicio.")
+            pref, tipo, titulo = c["codigo"], ("gas" if c["seccion_ef"] in SECCIONES_GASTO else "ing"), \
+                f"{c['codigo']} {c['nombre']}"
+        else:
+            pref, tipo, titulo = None, "res", "Resultado del ejercicio"
+
+        def valor(datos):
+            if pref:
+                return sum(v for cid, v in datos.items() if mapa[cid]["codigo"].startswith(pref))
+            return sum(-v if mapa[cid]["seccion_ef"] in SECCIONES_GASTO else v for cid, v in datos.items())
+
+        rep = Reporte(f"Evolución presupuestaria: {titulo}",
+                      self._subtitulo(emp, f"Presupuesto «{p['nombre']}» · períodos {periodicidad}es al "
+                                      f"{fmt_fecha(fecha)}"
+                                      + self._texto_filtro(local_id, cc_id)),
+                      [("Período", "texto", 22), ("Presupuesto", "importe", 14), ("Real", "importe", 14),
+                       ("Desvío", "importe", 13), ("Desvío %", "texto", 9), ("", "texto", 14),
+                       ("Presup. acum.", "importe", 14), ("Real acum.", "importe", 14), ("Desvío acum.", "importe", 13),
+                       ("Desvío % acum.", "texto", 10), (" ", "texto", 14)])
+        meses = meses_de(p["inicio"])
+        f = _fecha(fecha)
+        pa = ra = 0
+        for k in range(12 // mp):
+            a, b = meses[k * mp][1], meses[(k + 1) * mp - 1][2]
+            hasta = min(b, f)
+            nombre = (etiqueta_mes(p["inicio"], k + 1) if mp == 1 else
+                      f"{NOMBRE_PERIODO[mp]} {k + 1} ({MESES[a.month - 1]}–{MESES[b.month - 1]})")
+            pres_total = valor(self._pres_rango(pid, a.isoformat(), b.isoformat(), local_id, cc_id))
+            if a > f:      # períodos futuros: solo presupuesto
+                rep.agregar([nombre, pres_total, None, None, "", "a futuro", None, None, None, "", ""], "normal")
+                continue
+            pres = valor(self._pres_rango(pid, a.isoformat(), hasta.isoformat(), local_id, cc_id))
+            real = valor(self._real_rango(emp, a.isoformat(), hasta.isoformat(), local_id, cc_id))
+            pa += pres
+            ra += real
+            parcial = " (al " + fmt_fecha(hasta.isoformat())[:5] + ")" if hasta < b else ""
+            rep.agregar([nombre + parcial, pres, real, real - pres, fmt_pct(real, pres, tipo == "res"),
+                         calificar(real - pres, tipo), pa, ra, ra - pa, fmt_pct(ra, pa, tipo == "res"),
+                         calificar(ra - pa, tipo)],
+                        "subtitulo" if hasta < b else "normal")
+        anual = valor(self._pres_rango(pid, meses[0][1].isoformat(), meses[-1][2].isoformat(), local_id, cc_id))
+        rep.agregar(["Presupuesto anual completo", anual, None, None, "", "", None, None, None, "", ""], "total")
+        self._notas_presupuesto(rep)
+        return rep
+
+    def proyeccion_cierre(self, emp, pid, fecha, nivel=3, local_id=None, cc_id=None):
+        """Real a la fecha + presupuesto del resto del ejercicio, comparado con el presupuesto anual."""
+        p = self.presupuesto(pid)
+        fecha = parse_fecha(fecha)
+        self._periodo_de(p, fecha, 1)
+        meses = meses_de(p["inicio"])
+        fin = meses[-1][2].isoformat()
+        siguiente = (_fecha(fecha) + _dt.timedelta(days=1)).isoformat()
+        grupo, mapa = self._agrupador(pid, emp, nivel)
+        medidas = self._medidas(emp, mapa, grupo, {
+            "anual": self._pres_rango(pid, p["inicio"], fin, local_id, cc_id),
+            "real": self._real_rango(emp, p["inicio"], fecha, local_id, cc_id),
+            "resto": self._pres_rango(pid, siguiente, fin, local_id, cc_id) if fecha < fin else {}})
+        rep = Reporte(f"Proyección al cierre — presupuesto «{p['nombre']}»",
+                      self._subtitulo(emp, f"Real del {fmt_fecha(p['inicio'])} al {fmt_fecha(fecha)} + presupuesto "
+                                      f"hasta el {fmt_fecha(fin)}" + self._texto_filtro(local_id, cc_id)),
+                      [("Concepto", "texto", 32), ("Presup. anual", "importe", 14), ("Real a la fecha", "importe", 14),
+                       ("Presup. restante", "importe", 14), ("Proyección cierre", "importe", 15),
+                       ("Desvío proyectado", "importe", 14), ("Desvío %", "texto", 9), ("", "texto", 12)])
+
+        def fila(texto, v, tipo, estilo, niv):
+            anual, real, resto = v.get("anual", 0), v.get("real", 0), v.get("resto", 0)
+            proy = real + resto
+            rep.agregar([texto, anual, real, resto, proy, proy - anual, fmt_pct(proy, anual, tipo == "res"),
+                         calificar(proy - anual, tipo)], estilo, niv)
+
+        self._filas_er(rep, mapa, medidas, fila)
+        rep.notas.append("Proyección al cierre = lo realmente ocurrido hasta la fecha + lo que el presupuesto prevé "
+                         "para el resto del ejercicio. Muestra adónde se llegaría si lo que falta se cumple según lo "
+                         "planeado: es una herramienta para decidir correcciones a tiempo.")
+        self._notas_presupuesto(rep)
+        return rep
+
+    def comparar_escenarios(self, emp, ids, fecha=None, nivel=3, local_id=None, cc_id=None):
+        """Presupuesto anual de varios escenarios lado a lado, con el real acumulado a la fecha."""
+        if not ids:
+            raise ErrorContable("No hay presupuestos para comparar.")
+        ps = [self.presupuesto(i) for i in ids]
+        base = ps[0]
+        fin = meses_de(base["inicio"])[-1][2].isoformat()
+        fecha = parse_fecha(fecha) if fecha else fin
+        grupo, mapa = self._agrupador(list(ids), emp, nivel)
+        conj = {f"p{k}": self._pres_rango(i, p["inicio"], meses_de(p["inicio"])[-1][2].isoformat(), local_id, cc_id)
+                for k, (i, p) in enumerate(zip(ids, ps))}
+        conj["real"] = self._real_rango(emp, base["inicio"], min(fecha, fin), local_id, cc_id)
+        medidas = self._medidas(emp, mapa, grupo, conj)
+        rep = Reporte("Comparación de escenarios presupuestarios",
+                      self._subtitulo(emp, f"Presupuestos anuales · real acumulado al {fmt_fecha(min(fecha, fin))}"
+                                      + self._texto_filtro(local_id, cc_id)),
+                      [("Concepto", "texto", 32)] + [(p["nombre"][:18], "importe", 14) for p in ps]
+                      + [("Real a la fecha", "importe", 14)])
+
+        def fila(texto, v, tipo, estilo, niv):
+            rep.agregar([texto] + [v.get(f"p{k}", 0) for k in range(len(ps))] + [v.get("real", 0)], estilo, niv)
+
+        self._filas_er(rep, mapa, medidas, fila)
+        for p in ps:
+            if p["origen"] and p["origen"] != "manual":
+                rep.notas.append(f"«{p['nombre']}»: {p['origen']}.")
+        rep.notas.append("Los escenarios se comparan por su total anual. El real es el acumulado del ejercicio a la "
+                         "fecha indicada.")
+        return rep

@@ -1,0 +1,155 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+# Licencia Pública General GNU (GPL), versión 3 o posterior (ver LICENSE).
+"""Modelo de asiento de remuneraciones con la estructura uruguaya vigente (Industria y Comercio).
+
+Tasas verificadas el 17/11/2026 en fuentes oficiales (se citan en FUENTES). Cuando cambien, se corrigen aquí
+o directamente en el modelo de la empresa, que es editable.
+
+Estructura del asiento (por cada sector, por ejemplo administración y ventas):
+    Debe  Sueldos y jornales del sector ............ sueldo nominal (importe a ingresar)
+    Debe  Cargas sociales del sector ............... aporte jubilatorio patronal 7,5 %
+    Debe  Cargas sociales del sector ............... FONASA patronal 5 %
+    Debe  Cargas sociales del sector ............... FRL patronal 0,10 %
+    Debe  Cargas sociales del sector ............... Fondo de Garantía de Créditos Laborales 0,025 %
+       a  BPS a pagar .............................. aporte jubilatorio personal 15 % del nominal total
+       a  BPS a pagar .............................. FONASA personal (3 % a 8 %, ver notas) del nominal total
+       a  BPS a pagar .............................. FRL personal 0,10 % del nominal total
+       a  IRPF retenido ............................ importe a ingresar (escala progresiva y deducciones)
+       a  BPS a pagar .............................. aportes patronales (100 % de las líneas patronales)
+       a  Sueldos y jornales a pagar ............... líquido a pagar (cuadre)
+"""
+
+BPC_2026 = 6864
+
+TASAS = {
+    "jubilatorio_personal": 15.0,
+    "jubilatorio_patronal": 7.5,
+    "fonasa_patronal": 5.0,
+    "frl_personal": 0.10,
+    "frl_patronal": 0.10,
+    "fgcl_patronal": 0.025,
+}
+
+# Aporte personal FONASA de trabajadores dependientes (BPS): (situación, hasta 2,5 BPC, más de 2,5 BPC)
+FONASA_PERSONAL = [
+    ("Sin cónyuge o concubino, sin hijos", 3.0, 4.5),
+    ("Sin cónyuge o concubino, con hijos", 3.0, 6.0),
+    ("Con cónyuge o concubino a cargo, sin hijos", 5.0, 6.5),
+    ("Con cónyuge o concubino a cargo, con hijos", 5.0, 8.0),
+]
+FONASA_PERSONAL_POR_DEFECTO = 4.5     # más de 2,5 BPC, sin cónyuge ni hijos a cargo
+
+FUENTES = [
+    "BPS, «Tributación y recaudación de contribuciones especiales de seguridad social», edición 2026: aporte "
+    "jubilatorio 15 % personal y 7,5 % patronal (Industria y Comercio, p. 27); FONASA patronal 5 % más complemento "
+    "de cuota mutual (p. 30); FRL 0,10 % personal y 0,10 % patronal desde el 01/01/2019 (p. 31); Fondo de Garantía "
+    "de Créditos Laborales 0,025 % patronal desde el 01/01/2019, Ley 19.690 y Decreto 77/019 (p. 6). "
+    "https://www.bps.gub.uy/bps/file/24270/1/tributacion-y-recaudacion-de-contribuciones-especiales-de-seguridad-social.pdf",
+    "BPS, «Tasas Fonasa» (aporte personal según remuneración y situación familiar). "
+    "https://www.bps.gub.uy/10314/tasas-fonasa.html",
+    "BPS, Comunicado R 5/2026, «IRPF ejercicio 2026: valores mensuales» (BPC $ 6.864 desde 1/2026; escala "
+    "progresiva mensual; deducciones al 14 % hasta $ 102.960 y al 8 % por encima). "
+    "https://www.bps.gub.uy/23860/2026---comunicado-r-5---valores-escalas-irpf-2026.html",
+]
+
+# Escala mensual del IRPF 2026 (rentas del trabajo dependiente), en pesos: (hasta, tasa %)
+ESCALA_IRPF_2026 = [(48048, 0), (68640, 10), (102960, 15), (205920, 24), (343200, 25), (514800, 27),
+                    (789360, 31), (None, 36)]
+
+NOTAS = ("Tasas BPS vigentes en 2026 (Industria y Comercio): jubilatorio 15 % personal y 7,5 % patronal; FONASA "
+         "personal según sueldo y familia (hasta 2,5 BPC: 3 % o 5 % con cónyuge a cargo; más de 2,5 BPC: 4,5 % sin "
+         "hijos, 6 % con hijos, 6,5 % con cónyuge, 8 % con cónyuge e hijos) y 5 % patronal; FRL 0,10 % y 0,10 %; "
+         "Fondo de Garantía de Créditos Laborales 0,025 % patronal. El IRPF se ingresa cada mes (escala progresiva y "
+         "deducciones). No incluye el complemento de cuota mutual ni el seguro del BSE, que se facturan aparte. "
+         "BPC 2026: $ 6.864.")
+
+
+def irpf_mensual_sin_deducciones(nominal_menos_aportes):
+    """Impuesto de la escala progresiva sobre la renta mensual (sin deducciones). Pesos, no centésimos.
+    Sirve para mostrar un ejemplo; la liquidación real descuenta las deducciones."""
+    impuesto, desde = 0.0, 0
+    for hasta, tasa in ESCALA_IRPF_2026:
+        tope = nominal_menos_aportes if hasta is None else min(nominal_menos_aportes, hasta)
+        if tope > desde:
+            impuesto += (tope - desde) * tasa / 100
+        if hasta is None or nominal_menos_aportes <= hasta:
+            break
+        desde = hasta
+    return round(impuesto, 2)
+
+
+PATRONALES = (("jubilatorio_patronal", "Aporte jubilatorio patronal"), ("fonasa_patronal", "FONASA patronal"),
+              ("frl_patronal", "FRL patronal"), ("fgcl_patronal", "Fondo de Garantía de Créditos Laborales"))
+
+
+def tasa_patronal_total():
+    """Suma de las tasas patronales (12,625 % en 2026)."""
+    return round(sum(TASAS[k] for k, _ in PATRONALES), 6)
+
+
+def _sector(s):
+    """Acepta (nombre, cuenta_sueldos, cuenta_cargas, cc_id) o un dict con nombre, nominales
+    [(cuenta, etiqueta, importe_centésimos)], cargas, cc y local."""
+    if isinstance(s, dict):
+        return dict(nombre=s["nombre"], nominales=list(s["nominales"]), cargas=s["cargas"], cc=s.get("cc"),
+                    local=s.get("local"))
+    nombre, cta_sueldo, cta_cargas, cc = s
+    return dict(nombre=nombre, nominales=[(cta_sueldo, f"Sueldo nominal {nombre}", 0)], cargas=cta_cargas, cc=cc,
+                local=None)
+
+
+def lineas_remuneraciones(sectores, cta_bps, cta_irpf, cta_liquido, fonasa_personal=FONASA_PERSONAL_POR_DEFECTO,
+                          detallar_patronal=True):
+    """Líneas del modelo, como dicts para Contabilidad.guardar_modelo.
+    detallar_patronal=True: una línea por concepto patronal y sector; False: una línea por sector con la suma de
+    las tasas (12,625 %), con la composición en el concepto."""
+    sectores = [_sector(s) for s in sectores]
+    lineas, bases = [], []
+    for s in sectores:
+        s["filas"] = []
+        for cta, etiqueta, importe in s["nominales"]:
+            lineas.append(dict(cuenta_id=cta, lado="D", calculo="ingresar", importe=importe or 0, cc_id=s["cc"],
+                               local_id=s["local"], concepto=etiqueta))
+            s["filas"].append(len(lineas))
+            bases.append(len(lineas))
+    patronales = []
+    for s in sectores:
+        comun = dict(cuenta_id=s["cargas"], lado="D", calculo="porcentaje", base=s["filas"], cc_id=s["cc"],
+                     local_id=s["local"])
+        if detallar_patronal:
+            for clave, texto in PATRONALES:
+                lineas.append(dict(comun, porcentaje=TASAS[clave], concepto=f"{texto} {s['nombre']}"))
+                patronales.append(len(lineas))
+        else:
+            cortos = {"jubilatorio_patronal": "jubilatorio", "fonasa_patronal": "FONASA", "frl_patronal": "FRL",
+                      "fgcl_patronal": "FGCL"}
+            detalle = " + ".join(f"{cortos[clave]} {_pct(TASAS[clave])}" for clave, _ in PATRONALES)
+            lineas.append(dict(comun, porcentaje=tasa_patronal_total(),
+                               concepto=f"Aportes patronales {s['nombre']} ({detalle})"))
+            patronales.append(len(lineas))
+    for clave, texto, pct in (("jubilatorio_personal", "Aporte jubilatorio personal", None),
+                              (None, "FONASA personal", fonasa_personal),
+                              ("frl_personal", "FRL personal", None)):
+        lineas.append(dict(cuenta_id=cta_bps, lado="H", calculo="porcentaje", porcentaje=pct or TASAS[clave],
+                           base=bases, concepto=texto))
+    lineas.append(dict(cuenta_id=cta_irpf, lado="H", calculo="ingresar", importe=0, concepto="IRPF retenido"))
+    lineas.append(dict(cuenta_id=cta_bps, lado="H", calculo="porcentaje", porcentaje=100, base=patronales,
+                       concepto="Aportes patronales"))
+    lineas.append(dict(cuenta_id=cta_liquido, lado="H", calculo="cuadre", concepto="Líquido a pagar"))
+    return lineas
+
+
+def _pct(x):
+    return (f"{x:.3f}".rstrip("0").rstrip(".") + " %").replace(".", ",")
+
+
+def crear_modelo_remuneraciones(ctb, emp, sectores, cta_bps, cta_irpf, cta_liquido, nombre="Remuneraciones del mes",
+                                libro_id=None, local_id=None, fonasa_personal=FONASA_PERSONAL_POR_DEFECTO,
+                                detallar_patronal=True, notas=NOTAS):
+    """Crea (o reemplaza) el modelo de remuneraciones mensual en la empresa."""
+    previo = ctb.modelo_por_nombre(emp, nombre)
+    return ctb.guardar_modelo(emp, nombre, libro_id, local_id, "Remuneraciones del mes",
+                              lineas_remuneraciones(sectores, cta_bps, cta_irpf, cta_liquido, fonasa_personal,
+                                                    detallar_patronal),
+                              notas, modelo_id=previo["id"] if previo else None, periodicidad="mensual")

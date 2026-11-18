@@ -1,0 +1,663 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Auxiliar de clientes y proveedores (terceros).
+
+Una sola tabla de terceros por empresa, clasificados como Cliente, Proveedor o Ambos.
+Las cuentas colectivas (Deudores por ventas, Acreedores por compras...) se marcan en el
+plan de cuentas como «exige auxiliar» y cada movimiento lleva el tercero y su vencimiento.
+
+Partidas abiertas: una factura (movimiento del lado natural de la cuenta) queda pendiente
+hasta que se cancela. Un cobro o pago puede indicar qué operación cancela; si no lo indica,
+se aplica a las partidas más antiguas primero (criterio FIFO).
+"""
+import datetime as _dt
+import re
+import unicodedata
+
+from . import ain
+from .base import (ErrorContable, Reporte, fmt_fecha, fmt_importe, fmt_tc, parse_fecha, parse_importe,
+                   validar_documento)
+
+TIPOS_TERCERO = {"C": "Cliente", "P": "Proveedor", "A": "Cliente y proveedor"}
+TIPOS_AUXILIAR = {"C": "clientes", "P": "proveedores"}
+DOC_TIPOS = ["RUT", "CI", "Pasaporte", "Otro"]
+TRAMOS = [(0, "A vencer"), (30, "1 a 30 días"), (60, "31 a 60 días"), (90, "61 a 90 días"),
+          (None, "Más de 90 días")]
+
+
+def _clave(texto):
+    """Clave para comparar categorías sin importar mayúsculas, tildes ni espacios."""
+    t = unicodedata.normalize("NFKD", (texto or "").strip().lower())
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", t)
+
+
+class AuxiliaresMixin:
+    """Métodos del auxiliar de clientes y proveedores (se integran a Contabilidad)."""
+
+    # ------------------------------------------------------------ terceros
+    def terceros(self, emp, tipo=None, solo_activos=False, buscar=None):
+        sql, par = "SELECT * FROM terceros WHERE empresa_id=?", [emp]
+        if tipo == "C":
+            sql += " AND tipo IN ('C','A')"
+        elif tipo == "P":
+            sql += " AND tipo IN ('P','A')"
+        if solo_activos:
+            sql += " AND activo=1"
+        filas = self.con.execute(sql + " ORDER BY codigo", par).fetchall()
+        if buscar:
+            q = _clave(buscar)
+            filas = [t for t in filas if any(q in _clave(t[c]) for c in
+                                             ("codigo", "nombre", "nombre_comercial", "documento", "actividad",
+                                              "area", "localidad"))]
+        return filas
+
+    def tercero(self, tercero_id):
+        return self.con.execute("SELECT * FROM terceros WHERE id=?", (tercero_id,)).fetchone()
+
+    def categorias(self, emp, campo):
+        """Valores ya usados en 'actividad' o 'area', para ofrecerlos en una lista."""
+        if campo not in ("actividad", "area", "localidad"):
+            raise ValueError(campo)
+        return [r[0] for r in self.con.execute(
+            f"SELECT DISTINCT {campo} FROM terceros WHERE empresa_id=? AND COALESCE({campo},'')<>'' "
+            f"ORDER BY {campo}", (emp,))]
+
+    def _normalizar_categoria(self, emp, campo, valor):
+        valor = re.sub(r"\s+", " ", (valor or "").strip())
+        if not valor:
+            return None
+        for existente in self.categorias(emp, campo):
+            if _clave(existente) == _clave(valor):
+                return existente      # se respeta la grafía ya usada
+        return valor[0].upper() + valor[1:]
+
+    def tercero_en_uso(self, tercero_id):
+        return self.con.execute("SELECT 1 FROM movimientos WHERE tercero_id=? LIMIT 1",
+                                (tercero_id,)).fetchone() is not None
+
+    def guardar_tercero(self, emp, datos, tercero_id=None, forzar_documento=False, exigir_obligatorios=False):
+        """Alta o modificación. 'nombre' es la razón social. Con exigir_obligatorios (la pantalla, 7.6) son
+        obligatorios el código, el documento (RUT por defecto), el nombre comercial y la razón social; las
+        altas automáticas (importación de planillas) siguen como en la 7.5."""
+        d = {k: (v.strip() if isinstance(v, str) else v) for k, v in datos.items()}
+        codigo = (d.get("codigo") or "").upper()
+        if not re.fullmatch(r"[A-Z0-9_\-]{1,12}", codigo):
+            raise ErrorContable("El código del cliente o proveedor debe tener entre 1 y 12 letras o números, "
+                                "sin espacios (ej.: C001, PROV-UTE).")
+        if exigir_obligatorios:
+            faltan = [n for k, n in (("documento", "el RUT o documento"), ("nombre_comercial", "el nombre comercial"),
+                                     ("nombre", "la razón social")) if not d.get(k)]
+            if faltan:
+                raise ErrorContable("Faltan datos obligatorios: " + ", ".join(faltan) + ".")
+        if not d.get("nombre"):
+            raise ErrorContable("Falta el nombre o la razón social.")
+        ficha = self._ficha_tercero(d)
+        tipo = d.get("tipo") or "C"
+        if tipo not in TIPOS_TERCERO:
+            raise ErrorContable("El tipo debe ser Cliente, Proveedor o Ambos.")
+        doc_tipo = d.get("doc_tipo") or "RUT"
+        doc = validar_documento(doc_tipo, d.get("documento"), forzar_documento) or ""
+        if doc:
+            dup = self.con.execute("SELECT codigo FROM terceros WHERE empresa_id=? AND doc_tipo=? AND documento=? "
+                                   "AND id<>?", (emp, doc_tipo, doc, tercero_id or 0)).fetchone()
+            if dup:
+                raise ErrorContable(f"Ese documento ya está registrado para {dup[0]}.")
+        email = d.get("email") or ""
+        if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise ErrorContable("El correo electrónico no parece válido.")
+        try:
+            plazo = int(d.get("plazo_dias") or 0)
+        except ValueError:
+            raise ErrorContable("El plazo de pago se indica en días (número entero).")
+        if not 0 <= plazo <= 3650:
+            raise ErrorContable("El plazo de pago debe estar entre 0 y 3650 días.")
+        limite = d.get("limite_credito")
+        limite = parse_importe(limite) if isinstance(limite, str) else limite
+        if self.con.execute("SELECT 1 FROM terceros WHERE empresa_id=? AND codigo=? AND id<>?",
+                            (emp, codigo, tercero_id or 0)).fetchone():
+            raise ErrorContable(f"Ya existe un cliente o proveedor con el código {codigo}.")
+        if tercero_id and tipo != "A":
+            otro = "P" if tipo == "C" else "C"
+            if self.con.execute("SELECT 1 FROM movimientos m JOIN cuentas c ON c.id=m.cuenta_id "
+                                "WHERE m.tercero_id=? AND c.auxiliar=? LIMIT 1", (tercero_id, otro)).fetchone():
+                raise ErrorContable(f"No se puede cambiar a {TIPOS_TERCERO[tipo]}: tiene movimientos como "
+                                    f"{TIPOS_TERCERO[otro].lower()}. Use «Cliente y proveedor».")
+        valores = (codigo, d["nombre"], d.get("nombre_comercial") or d["nombre"], ficha["tipo_societario"],
+                   ficha["ciiu"], ficha["giro"], ficha["departamento"], tipo, doc_tipo, doc or None,
+                   self._normalizar_categoria(emp, "actividad", d.get("actividad")),
+                   self._normalizar_categoria(emp, "area", d.get("area")),
+                   d.get("direccion") or None, self._normalizar_categoria(emp, "localidad", d.get("localidad")),
+                   d.get("telefono") or None, email or None, d.get("contacto") or None, plazo, limite or None,
+                   d.get("observaciones") or None, int(bool(d.get("activo", True))))
+        campos = ("codigo,nombre,nombre_comercial,tipo_societario,ciiu,giro,departamento,tipo,doc_tipo,documento,"
+                  "actividad,area,direccion,localidad,telefono,email,contacto,plazo_dias,limite_credito,"
+                  "observaciones,activo")
+        with self.con:
+            if tercero_id:
+                asignar = ",".join(f"{c}=?" for c in campos.split(","))
+                self.con.execute(f"UPDATE terceros SET {asignar} WHERE id=? AND empresa_id=?",
+                                 valores + (tercero_id, emp))
+                return tercero_id
+            return self.con.execute(f"INSERT INTO terceros(empresa_id,{campos}) VALUES (?{',?' * len(valores)})",
+                                    (emp,) + valores).lastrowid
+
+    @staticmethod
+    def _ficha_tercero(d):
+        """Campos tomados de la ficha de la empresa (Formulario E de la AIN), validados con sus listas."""
+        out = dict(tipo_societario=ain._opcion(d.get("tipo_societario"), ain.TIPOS_SOCIETARIOS, "Tipo societario"),
+                   departamento=ain._opcion(d.get("departamento"), ain.DEPARTAMENTOS, "Departamento"),
+                   ciiu=None, giro=None)
+        cod = ain.normalizar_ciiu(d.get("ciiu"))
+        if cod:
+            fila = ain.ciiu_por_codigo(cod)
+            if not fila:
+                raise ErrorContable(f"CIIU: el código {cod} no está en la tabla del formulario de la AIN.")
+            out["ciiu"], out["giro"] = fila["codigo"], fila["giro"]
+        return out
+
+    def motivo_no_baja(self, tercero_id):
+        """Explicación de por qué un tercero no se puede dar de baja, o None si se puede."""
+        t = self.tercero(tercero_id)
+        r = self.con.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT m.asiento_id), MIN(a.fecha), MAX(a.fecha), "
+            "GROUP_CONCAT(DISTINCT c.codigo) FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+            "JOIN cuentas c ON c.id=m.cuenta_id WHERE m.tercero_id=?", (tercero_id,)).fetchone()
+        if r[0]:
+            return (f"No se puede dar de baja a {t['codigo']} {t['nombre_comercial'] or t['nombre']}: tiene {r[0]} "
+                    f"movimientos en {r[1]} asientos, del {fmt_fecha(r[2])} al {fmt_fecha(r[3])} (cuentas "
+                    f"{r[4].replace(',', ', ')}).\n\nEsos asientos forman su estado de cuenta, los saldos de clientes "
+                    "y proveedores y la antigüedad de saldos: si se borrara, quedarían movimientos sin dueño y esos "
+                    "informes dejarían de cerrar con la cuenta colectiva.\n\nSi ya no opera con la empresa, "
+                    "desmarque «Activo»: deja de ofrecerse al cargar asientos y su historia se conserva.")
+        m = self.con.execute("SELECT m.nombre FROM modelo_lineas l JOIN modelos_asiento m ON m.id=l.modelo_id "
+                             "WHERE l.tercero_id=? LIMIT 1", (tercero_id,)).fetchone()
+        if m:
+            return (f"No se puede dar de baja: el modelo de asiento «{m[0]}» lo usa. Cambie o elimine esa línea del "
+                    "modelo primero.")
+        import json
+        for (txt,) in self.con.execute("SELECT la.lineas FROM lote_asientos la JOIN lotes l ON l.id=la.lote_id "
+                                       "WHERE l.empresa_id=? AND l.estado='ABIERTO'", (t["empresa_id"],)):
+            try:
+                if any(x.get("tercero_id") == tercero_id for x in json.loads(txt)):
+                    return ("No se puede dar de baja: un lote sin registrar tiene asientos con este cliente o "
+                            "proveedor. Registre o corrija el lote primero.")
+            except (ValueError, TypeError):
+                pass
+        return None
+
+    def eliminar_tercero(self, tercero_id):
+        motivo = self.motivo_no_baja(tercero_id)
+        if motivo:
+            raise ErrorContable(motivo)
+        with self.con:
+            self.con.execute("DELETE FROM terceros WHERE id=?", (tercero_id,))
+
+    # ------------------------------------------------- validación de líneas
+    def _validar_tercero(self, emp, i, cta, l):
+        tid = l.get("tercero_id")
+        aux = cta["auxiliar"]
+        if aux and not tid:
+            raise ErrorContable(f"Línea {i}: la cuenta {cta['codigo']} {cta['nombre']} lleva auxiliar de "
+                                f"{TIPOS_AUXILIAR[aux]}: indique a qué {TIPOS_TERCERO[aux].lower()} corresponde.")
+        if tid:
+            t = self.tercero(tid)
+            if not t or t["empresa_id"] != emp:
+                raise ErrorContable(f"Línea {i}: el cliente o proveedor no pertenece a esta empresa.")
+            if aux and t["tipo"] not in (aux, "A"):
+                raise ErrorContable(f"Línea {i}: {t['codigo']} {t['nombre']} está registrado como "
+                                    f"{TIPOS_TERCERO[t['tipo']].lower()}; la cuenta {cta['codigo']} es de "
+                                    f"{TIPOS_AUXILIAR[aux]}.")
+        if l.get("vencimiento"):
+            l["vencimiento"] = parse_fecha(l["vencimiento"])
+        ref = l.get("ref_asiento_id")
+        if ref and not l.get("moneda"):
+            if not aux:
+                raise ErrorContable(f"Línea {i}: solo se indica la operación que se cancela en cuentas con "
+                                    "auxiliar o en moneda extranjera.")
+            sql = "SELECT 1 FROM movimientos WHERE asiento_id=? AND cuenta_id=?"
+            par = [ref, cta["id"]]
+            if tid:
+                sql += " AND tercero_id=?"
+                par.append(tid)
+            if not self.con.execute(sql, par).fetchone():
+                a = self.asiento(ref)
+                raise ErrorContable(f"Línea {i}: el asiento Nº {a['numero'] if a else '?'} no tiene una operación "
+                                    f"de ese {TIPOS_TERCERO.get(aux, 'tercero').lower()} en la cuenta {cta['codigo']}.")
+
+    def vencimiento_por_defecto(self, fecha_iso, cta, l):
+        """Vencimiento propuesto: fecha + plazo del tercero, solo para operaciones nuevas del lado natural."""
+        if l.get("vencimiento") or not l.get("tercero_id") or not cta["auxiliar"] or l.get("ref_asiento_id"):
+            return l.get("vencimiento")
+        natural = (cta["naturaleza"] == "D" and l.get("debe")) or (cta["naturaleza"] == "A" and l.get("haber"))
+        if not natural:
+            return None
+        plazo = self.tercero(l["tercero_id"])["plazo_dias"] or 0
+        return (_dt.date.fromisoformat(fecha_iso) + _dt.timedelta(days=plazo)).isoformat()
+
+    # ---------------------------------------------------- partidas abiertas
+    def partidas_abiertas(self, emp, cuenta_id, tercero_id=None, fecha=None, excluir_asiento=None):
+        """Partidas pendientes por tercero de una cuenta con auxiliar.
+        Devuelve {tercero_id: {"partidas": [...], "a_favor": importe}}.
+        Los importes están en la moneda de la cuenta (ME si la cuenta es en moneda extranjera)."""
+        cta = self.cuenta(cuenta_id)
+        en_me = bool(cta["moneda"])
+        sql = ("SELECT m.*, a.numero, a.fecha, a.concepto AS cab FROM movimientos m "
+               "JOIN asientos a ON a.id=m.asiento_id WHERE a.empresa_id=? AND m.cuenta_id=? AND a.id<>?")
+        par = [emp, cuenta_id, excluir_asiento or 0]
+        if tercero_id:
+            sql += " AND m.tercero_id=?"
+            par.append(tercero_id)
+        if fecha:
+            sql += " AND a.fecha<=?"
+            par.append(parse_fecha(fecha))
+        movs = self.con.execute(sql + " ORDER BY a.fecha, a.numero, m.orden", par).fetchall()
+        lado_natural = "debe" if cta["naturaleza"] == "D" else "haber"
+        res = {}
+        for m in movs:
+            imp = (m["importe_me"] or 0) if en_me else (m["debe"] + m["haber"])
+            if not imp:
+                continue          # ajustes por diferencia de cambio: no cambian lo adeudado en ME
+            signo = 1 if m[lado_natural] else -1
+            g = res.setdefault(m["tercero_id"], {"partidas": {}, "aplicar": [], "a_favor": 0})
+            if m["ref_asiento_id"] is None and signo > 0:
+                p = g["partidas"].setdefault(m["asiento_id"], dict(
+                    asiento_id=m["asiento_id"], numero=m["numero"], fecha=m["fecha"],
+                    vencimiento=m["vencimiento"] or m["fecha"], concepto=m["concepto"] or m["cab"],
+                    importe=0, pesos=0, pendiente=0, moneda=cta["moneda"]))
+                p["importe"] += imp
+                p["pesos"] += m["debe"] + m["haber"]
+                p["pendiente"] += imp
+                if m["vencimiento"] and m["vencimiento"] > p["vencimiento"]:
+                    p["vencimiento"] = m["vencimiento"]
+            else:
+                g["aplicar"].append((m["ref_asiento_id"], signo * imp))
+        for g in res.values():
+            sueltos = 0
+            for ref, valor in g["aplicar"]:
+                if ref in g["partidas"]:
+                    g["partidas"][ref]["pendiente"] += valor
+                else:
+                    sueltos += valor
+            # lo no aplicado a una operación concreta se imputa a las más antiguas (FIFO)
+            for p in sorted(g["partidas"].values(), key=lambda p: (p["vencimiento"], p["fecha"], p["numero"])):
+                if sueltos < 0 and p["pendiente"] > 0:
+                    usar = min(p["pendiente"], -sueltos)
+                    p["pendiente"] -= usar
+                    sueltos += usar
+            for p in g["partidas"].values():      # cancelaciones de más: saldo a favor
+                if p["pendiente"] < 0:
+                    sueltos += p["pendiente"]
+                    p["pendiente"] = 0
+            g["a_favor"] = -sueltos if sueltos < 0 else 0
+            g["extra"] = sueltos if sueltos > 0 else 0
+            g["partidas"] = [p for p in sorted(g["partidas"].values(), key=lambda p: (p["fecha"], p["numero"]))
+                             if p["pendiente"]]
+            for p in g["partidas"]:
+                p["tc"] = p["pesos"] / p["importe"] if en_me and p["importe"] else None
+            del g["aplicar"]
+        return res
+
+    # --------------------------------------------------------------- informes
+    def cuentas_con_auxiliar(self, emp, cuenta_id=None, aux=None):
+        """Cuentas con auxiliar; si cuenta_id es un rubro, las que están debajo de él."""
+        sql, par = "SELECT * FROM cuentas WHERE empresa_id=? AND imputable=1 AND auxiliar IS NOT NULL", [emp]
+        if cuenta_id:
+            sql += " AND codigo LIKE ?"
+            par.append(self.cuenta(cuenta_id)["codigo"] + "%")
+        if aux:
+            sql += " AND auxiliar=?"
+            par.append(aux)
+        return self.con.execute(sql + " ORDER BY codigo", par).fetchall()
+
+    def _ficha(self, t):
+        if not t:
+            return "Sin identificar"
+        return f"{t['codigo']} {t['nombre']}"
+
+    def estado_cuenta(self, emp, tercero_id, desde=None, hasta=None, cuenta_id=None):
+        t = self.tercero(tercero_id)
+        if not t:
+            raise ErrorContable("Elija el cliente o proveedor.")
+        desde = parse_fecha(desde) if desde else None
+        hasta = parse_fecha(hasta) if hasta else None
+        sql = ("SELECT DISTINCT c.* FROM movimientos m JOIN cuentas c ON c.id=m.cuenta_id "
+               "WHERE m.tercero_id=?")
+        par = [tercero_id]
+        if cuenta_id:
+            sql += " AND c.codigo LIKE ?"
+            par.append(self.cuenta(cuenta_id)["codigo"] + "%")
+        ctas = self.con.execute(sql + " ORDER BY c.codigo", par).fetchall()
+        datos = [TIPOS_TERCERO[t["tipo"]]]
+        if t["documento"]:
+            datos.append(f"{t['doc_tipo']} {t['documento']}")
+        for k in ("actividad", "area"):
+            if t[k]:
+                datos.append(t[k])
+        if t["plazo_dias"]:
+            datos.append(f"plazo {t['plazo_dias']} días")
+        rep = Reporte(f"Estado de cuenta de {t['codigo']} {t['nombre']}",
+                      self._subtitulo(emp, " · ".join(datos) + " · " + self._texto_periodo(desde, hasta)),
+                      [("Fecha", "fecha", 10), ("Asiento", "texto", 7), ("Concepto", "texto", 36),
+                       ("Vence", "fecha", 10), ("Debe", "importe", 14), ("Haber", "importe", 14),
+                       ("Saldo", "importe", 14)])
+        if not ctas:
+            rep.notas.append("No tiene movimientos registrados.")
+            return rep
+        for c in ctas:
+            sg = 1 if c["naturaleza"] == "D" else -1
+            rep.agregar(["", "", f"{c['codigo']} {c['nombre']}", "", None, None, None], "subtitulo")
+            saldo = 0
+            if desde:
+                saldo = self.con.execute(
+                    "SELECT COALESCE(SUM(m.debe-m.haber),0) FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+                    "WHERE m.tercero_id=? AND m.cuenta_id=? AND a.fecha<?", (tercero_id, c["id"], desde)).fetchone()[0]
+                rep.agregar(["", "", "Saldo anterior", "", None, None, sg * saldo])
+            q = ("SELECT m.*, a.numero, a.fecha, a.concepto AS cab, r.numero AS ref_numero FROM movimientos m "
+                 "JOIN asientos a ON a.id=m.asiento_id LEFT JOIN asientos r ON r.id=m.ref_asiento_id "
+                 "WHERE m.tercero_id=? AND m.cuenta_id=?")
+            p2 = [tercero_id, c["id"]]
+            if desde:
+                q += " AND a.fecha>=?"
+                p2.append(desde)
+            if hasta:
+                q += " AND a.fecha<=?"
+                p2.append(hasta)
+            td = th = 0
+            for m in self.con.execute(q + " ORDER BY a.fecha, a.numero, m.orden", p2):
+                saldo += m["debe"] - m["haber"]
+                td += m["debe"]
+                th += m["haber"]
+                conc = m["concepto"] or m["cab"]
+                if m["moneda"] and m["importe_me"]:
+                    conc += f" [{m['moneda']} {fmt_importe(m['importe_me'])} × {fmt_tc(m['tipo_cambio'])}]"
+                if m["ref_numero"]:
+                    conc += f" (cancela As. {m['ref_numero']})"
+                rep.agregar([fmt_fecha(m["fecha"]), str(m["numero"]), conc, fmt_fecha(m["vencimiento"]),
+                             m["debe"] or None, m["haber"] or None, sg * saldo])
+            rep.agregar(["", "", f"Total {c['codigo']} y saldo", "", td, th, sg * saldo], "total")
+            pend = self.partidas_abiertas(emp, c["id"], tercero_id, hasta).get(tercero_id)
+            if pend and (pend["partidas"] or pend["a_favor"]):
+                mon = c["moneda"] or "$"
+                rep.agregar(["", "", f"Partidas pendientes ({mon})", "", None, None, None], "subtitulo", 1)
+                ref = _dt.date.fromisoformat(hasta) if hasta else _dt.date.today()
+                for p in pend["partidas"]:
+                    dias = (ref - _dt.date.fromisoformat(p["vencimiento"])).days
+                    estado = f"vencida hace {dias} días" if dias > 0 else "a vencer"
+                    rep.agregar([fmt_fecha(p["fecha"]), str(p["numero"]), f"{p['concepto']} · {estado}",
+                                 fmt_fecha(p["vencimiento"]), None, None, p["pendiente"]], "normal", 1)
+                if pend["a_favor"]:
+                    rep.agregar(["", "", "Pagos o cobros a cuenta, sin aplicar (saldo a favor)", "", None, None,
+                                 -pend["a_favor"]], "normal", 1)
+        if t["limite_credito"]:
+            rep.notas.append(f"Límite de crédito: $ {fmt_importe(t['limite_credito'])}.")
+        rep.notas.append("Saldo: positivo es lo que corresponde al lado normal de la cuenta (lo que el cliente "
+                         "debe o lo que se le debe al proveedor); entre paréntesis, saldo a favor.")
+        rep.notas.append("Partidas pendientes: los cobros y pagos que no indican qué operación cancelan se "
+                         "aplican a las más antiguas primero.")
+        return rep
+
+    def saldos_terceros(self, emp, hasta=None, cuenta_id=None, agrupar="cuenta"):
+        hasta = parse_fecha(hasta) if hasta else None
+        ctas = self.cuentas_con_auxiliar(emp, cuenta_id)
+        if not ctas:
+            raise ErrorContable("No hay cuentas con auxiliar de clientes o proveedores"
+                                + (" en ese rubro." if cuenta_id else ". Márquelas en el plan de cuentas."))
+        rep = Reporte("Saldos de clientes y proveedores",
+                      self._subtitulo(emp, (f"Al {fmt_fecha(hasta)}" if hasta else "Todos los movimientos")
+                                      + {"cuenta": "", "actividad": " · Agrupado por actividad",
+                                         "area": " · Agrupado por área"}[agrupar]),
+                      [("Código", "texto", 9), ("Nombre", "texto", 30)]
+                      + ([] if agrupar == "cuenta" else [("Cuenta", "texto", 24)])
+                      + [("Actividad", "texto", 16), ("Área", "texto", 14), ("Saldo ME", "texto", 14),
+                         ("Saldo $", "importe", 15)])
+        con_cuenta = agrupar != "cuenta"
+
+        def agregar(cod, nombre, cuenta, act, area, me, saldo, estilo, nivel=0):
+            vals = [cod, nombre] + ([cuenta] if con_cuenta else []) + [act, area, me, saldo]
+            rep.agregar(vals, estilo, nivel)
+        filas, controles = [], []
+        for c in ctas:
+            sg = 1 if c["naturaleza"] == "D" else -1
+            q = ("SELECT m.tercero_id, SUM(m.debe-m.haber), "
+                 "SUM(CASE WHEN m.debe>0 THEN COALESCE(m.importe_me,0) ELSE -COALESCE(m.importe_me,0) END) "
+                 "FROM movimientos m JOIN asientos a ON a.id=m.asiento_id WHERE m.cuenta_id=?")
+            par = [c["id"]]
+            if hasta:
+                q += " AND a.fecha<=?"
+                par.append(hasta)
+            tot = hay = 0
+            for tid, pesos, me in self.con.execute(q + " GROUP BY m.tercero_id", par):
+                hay = 1
+                tot += pesos
+                if pesos == 0 and (me or 0) == 0:
+                    continue
+                t = self.tercero(tid) if tid else None
+                filas.append(dict(t=t, cuenta=c, pesos=sg * pesos, me=sg * (me or 0)))
+            if hay:
+                controles.append((c, sg * tot))
+        if agrupar == "cuenta":
+            clave = lambda f: f"{f['cuenta']['codigo']} {f['cuenta']['nombre']}"
+        else:
+            clave = lambda f: (f["t"][agrupar] if f["t"] and f["t"][agrupar] else "(sin dato)")
+        total_gral = 0
+        for grupo in sorted({clave(f) for f in filas}):
+            agregar("", grupo, "", "", "", "", None, "subtitulo")
+            sub = 0
+            for f in sorted([f for f in filas if clave(f) == grupo],
+                            key=lambda f: (f["t"]["codigo"] if f["t"] else "~", f["cuenta"]["codigo"])):
+                t, c = f["t"], f["cuenta"]
+                me = f"{c['moneda']} {fmt_importe(f['me'])}" if c["moneda"] else ""
+                estilo = "normal" if t else "alerta"
+                agregar(t["codigo"] if t else "?", t["nombre"] if t else "Sin identificar",
+                        f"{c['codigo']} {c['nombre']}", (t["actividad"] or "") if t else "",
+                        (t["area"] or "") if t else "", me, f["pesos"], estilo, 1)
+                sub += f["pesos"]
+            agregar("", f"Total {grupo}", "", "", "", "", sub, "subtotal")
+            total_gral += sub
+        if agrupar != "cuenta":
+            agregar("", "TOTAL", "", "", "", "", total_gral, "total")
+            rep.notas.append("El total mezcla saldos de clientes y de proveedores: sirve para ver la composición "
+                             "por grupo, no como un saldo a cobrar o a pagar.")
+        # control contra las cuentas colectivas
+        sin_id = [f for f in filas if not f["t"]]
+        for c, saldo in controles:
+            suma = sum(f["pesos"] for f in filas if f["cuenta"]["id"] == c["id"] and f["t"])
+            if suma == saldo:
+                rep.notas.append(f"Control {c['codigo']} {c['nombre']}: la suma de los saldos individuales "
+                                 f"($ {fmt_importe(suma)}) es igual al saldo de la cuenta colectiva.")
+            else:
+                rep.notas.append(f"Atención {c['codigo']} {c['nombre']}: saldos individuales $ {fmt_importe(suma)}, "
+                                 f"cuenta colectiva $ {fmt_importe(saldo)}. La diferencia son movimientos sin "
+                                 "cliente o proveedor identificado.")
+        if sin_id:
+            rep.notas.append("Las filas «Sin identificar» son movimientos registrados antes de que la cuenta "
+                             "exigiera auxiliar, o sin tercero.")
+        return rep
+
+    def antiguedad_saldos(self, emp, fecha, cuenta_id=None):
+        fecha = parse_fecha(fecha)
+        ref = _dt.date.fromisoformat(fecha)
+        ctas = self.cuentas_con_auxiliar(emp, cuenta_id)
+        if not ctas:
+            raise ErrorContable("No hay cuentas con auxiliar de clientes o proveedores.")
+        rep = Reporte("Antigüedad de saldos",
+                      self._subtitulo(emp, f"Al {fmt_fecha(fecha)} · Días de atraso contados desde el vencimiento"),
+                      [("Código", "texto", 9), ("Nombre", "texto", 28)]
+                      + [(n, "importe", 13) for _, n in TRAMOS]
+                      + [("A favor", "importe", 12), ("Total", "importe", 14)])
+        for c in ctas:
+            datos = self.partidas_abiertas(emp, c["id"], None, fecha)
+            if not datos:
+                continue
+            mon = c["moneda"] or "$"
+            rep.agregar(["", f"{c['codigo']} {c['nombre']} (en {mon})"] + [None] * (len(TRAMOS) + 2), "subtitulo")
+            tot = [0] * (len(TRAMOS) + 2)
+            for tid in sorted(datos, key=lambda x: (self.tercero(x)["codigo"] if x else "~")):
+                g = datos[tid]
+                v = [0] * (len(TRAMOS) + 2)
+                for p in g["partidas"]:
+                    dias = (ref - _dt.date.fromisoformat(p["vencimiento"])).days
+                    k = 0 if dias <= 0 else next((j for j, (lim, _) in enumerate(TRAMOS) if lim and dias <= lim),
+                                                 len(TRAMOS) - 1)
+                    v[k] += p["pendiente"]
+                v[0] += g.get("extra", 0)
+                v[-2] = -g["a_favor"]
+                v[-1] = sum(v[:-1])
+                if not any(v):
+                    continue
+                t = self.tercero(tid) if tid else None
+                rep.agregar([t["codigo"] if t else "?", t["nombre"] if t else "Sin identificar",
+                             *[x or None for x in v[:-1]], v[-1]], "normal" if t else "alerta", 1)
+                tot = [a + b for a, b in zip(tot, v)]
+            rep.agregar(["", f"Total {c['codigo']}", *tot], "subtotal")
+        rep.notas.append("Cada operación se ubica según los días transcurridos desde su vencimiento. Los cobros y "
+                         "pagos que no indican qué operación cancelan se aplican a las más antiguas.")
+        rep.notas.append("«A favor»: cobros o pagos a cuenta que superan lo adeudado (anticipos).")
+        return rep
+
+    # ------------------------------------------------ ventas y compras
+    def ventas_compras(self, emp, lado, desde, hasta, agrupar="tercero"):
+        """Ventas por cliente (lado='ventas') o compras por proveedor (lado='compras').
+
+        - Ventas netas: líneas de «Ingresos de actividades ordinarias» del período. Se atribuyen al
+          cliente indicado en esa línea o, si no lo tiene, al cliente de la cuenta de deudores del mismo
+          asiento (en proporción a lo facturado a cada uno). Las ventas sin cliente quedan como
+          «Contado / sin identificar», así el total coincide con el Estado de Resultados.
+        - Facturado: operaciones nuevas en cuentas con auxiliar (lo que el cliente pasa a deber o lo que
+          se le pasa a deber al proveedor), con IVA incluido.
+        - Cobrado / Pagado: cancelaciones en esas cuentas durante el período.
+        - Saldo: saldo del tercero en las cuentas con auxiliar al cierre del período.
+        """
+        aux = "C" if lado == "ventas" else "P"
+        desde, hasta = parse_fecha(desde), parse_fecha(hasta)
+        mapa = self.mapa_cuentas(emp)
+        movs = self.con.execute(
+            "SELECT m.*, a.fecha FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+            "WHERE a.empresa_id=? AND a.fecha BETWEEN ? AND ? ORDER BY a.id, m.orden",
+            (emp, desde, hasta)).fetchall()
+        por_asiento = {}
+        for m in movs:
+            por_asiento.setdefault(m["asiento_id"], []).append(m)
+        filas = {}     # tercero_id (o None) -> dict
+
+        def fila(tid):
+            return filas.setdefault(tid, dict(neto=0, facturado=0, cancelado=0, saldo=0))
+
+        for lineas in por_asiento.values():
+            fact = {}
+            for m in lineas:
+                c = mapa[m["cuenta_id"]]
+                if c["auxiliar"] == aux and m["tercero_id"]:
+                    natural = m["debe"] if c["naturaleza"] == "D" else m["haber"]
+                    contrario = m["haber"] if c["naturaleza"] == "D" else m["debe"]
+                    if natural and not m["ref_asiento_id"]:
+                        fila(m["tercero_id"])["facturado"] += natural
+                        fact[m["tercero_id"]] = fact.get(m["tercero_id"], 0) + natural
+                    else:
+                        fila(m["tercero_id"])["cancelado"] += contrario - (natural if m["ref_asiento_id"] else 0)
+            if lado != "ventas":
+                continue
+            ing = [m for m in lineas if mapa[m["cuenta_id"]]["seccion_ef"] == "ING"]
+            for m in ing:
+                neto = m["haber"] - m["debe"]
+                if m["tercero_id"]:
+                    fila(m["tercero_id"])["neto"] += neto
+                elif fact:
+                    total_f, repartido = sum(fact.values()), 0
+                    items = list(fact.items())
+                    for k, (tid, f) in enumerate(items):
+                        parte = neto - repartido if k == len(items) - 1 else round(neto * f / total_f)
+                        fila(tid)["neto"] += parte
+                        repartido += parte
+                else:
+                    fila(None)["neto"] += neto
+        # saldos al cierre en las cuentas con auxiliar
+        for c in self.cuentas_con_auxiliar(emp, aux=aux):
+            sg = 1 if c["naturaleza"] == "D" else -1
+            for tid, saldo in self.con.execute(
+                    "SELECT m.tercero_id, SUM(m.debe-m.haber) FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+                    "WHERE m.cuenta_id=? AND a.fecha<=? AND m.tercero_id IS NOT NULL GROUP BY m.tercero_id",
+                    (c["id"], hasta)):
+                if saldo:
+                    fila(tid)["saldo"] += sg * saldo
+        filas = {k: v for k, v in filas.items() if any(v.values())}
+
+        ventas = lado == "ventas"
+        nombre_ag = {"tercero": "", "actividad": " · por actividad", "area": " · por área",
+                     "localidad": " · por localidad"}[agrupar]
+        cols = [("Código", "texto", 7), ("Nombre", "texto", 26)] if agrupar == "tercero" else \
+            [(agrupar.capitalize() if agrupar != "area" else "Área", "texto", 26), ("Cant.", "texto", 5)]
+        if ventas:
+            cols += [("Ventas netas", "importe", 14), ("%", "texto", 7)]
+        cols += [("Facturado c/IVA", "importe", 14), ("%", "texto", 7),
+                 ("Cobrado" if ventas else "Pagado", "importe", 14), ("Saldo al cierre", "importe", 14)]
+        rep = Reporte("Ventas por cliente" if ventas else "Compras por proveedor",
+                      self._subtitulo(emp, f"Período del {fmt_fecha(desde)} al {fmt_fecha(hasta)}{nombre_ag}"), cols)
+        tot = dict(neto=0, facturado=0, cancelado=0, saldo=0)
+        for v in filas.values():
+            for k in tot:
+                tot[k] += v[k]
+
+        def pct(x, total):
+            return f"{100 * x / total:.1f} %".replace(".", ",") if total else ""
+
+        def valores(cab, v):
+            out = list(cab)
+            if ventas:
+                out += [v["neto"], pct(v["neto"], tot["neto"])]
+            out += [v["facturado"], pct(v["facturado"], tot["facturado"]), v["cancelado"], v["saldo"]]
+            return out
+
+        if agrupar == "tercero":
+            orden = sorted(filas, key=lambda t: -(filas[t]["neto"] if ventas else filas[t]["facturado"]))
+            for tid in orden:
+                t = self.tercero(tid) if tid else None
+                cab = (t["codigo"], t["nombre"]) if t else ("", "Contado / sin cliente identificado")
+                rep.agregar(valores(cab, filas[tid]), "normal" if t else "alerta")
+        else:
+            grupos = {}
+            for tid, v in filas.items():
+                t = self.tercero(tid) if tid else None
+                g = (t[agrupar] if t and t[agrupar] else "(sin dato)") if t else "Contado / sin identificar"
+                acc = grupos.setdefault(g, dict(neto=0, facturado=0, cancelado=0, saldo=0, n=0))
+                for k in ("neto", "facturado", "cancelado", "saldo"):
+                    acc[k] += v[k]
+                acc["n"] += 1 if t else 0
+            for g in sorted(grupos, key=lambda g: -(grupos[g]["neto"] if ventas else grupos[g]["facturado"])):
+                rep.agregar(valores((g, str(grupos[g]["n"]) if grupos[g]["n"] else ""), grupos[g]))
+        rep.agregar(valores(("", "TOTAL") if agrupar == "tercero" else ("TOTAL", ""), tot), "total")
+        if ventas:
+            er = self.resultado_seccion(emp, "ING", desde, hasta)
+            if er == tot["neto"]:
+                rep.notas.append(f"Control: el total de ventas netas ($ {fmt_importe(er)}) coincide con los Ingresos "
+                                 "de actividades ordinarias del Estado de Resultados.")
+            else:
+                rep.notas.append(f"Atención: ventas netas $ {fmt_importe(tot['neto'])} y Estado de Resultados "
+                                 f"$ {fmt_importe(er)}.")
+            rep.notas.append("Ventas netas: sin IVA, según las cuentas de ingresos. Facturado c/IVA: lo vendido "
+                             "a crédito, registrado en las cuentas de clientes.")
+        else:
+            rep.notas.append("Facturado c/IVA: compras a crédito registradas en las cuentas de proveedores. "
+                             "Las compras al contado no pasan por esas cuentas y no figuran aquí.")
+        rep.notas.append("El orden es de mayor a menor importancia (criterio de Pareto: suele ocurrir que pocos "
+                         "clientes o proveedores concentran la mayor parte del movimiento).")
+        return rep
+
+    def resultado_seccion(self, emp, seccion, desde, hasta):
+        """Total de una sección del Estado de Resultados (positivo para ingresos)."""
+        mapa = self.mapa_cuentas(emp)
+        return sum(h - d for cid, (d, h) in self.sumas(emp, desde, hasta).items()
+                   if mapa[cid]["seccion_ef"] == seccion)

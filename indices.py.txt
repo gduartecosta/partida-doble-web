@@ -1,0 +1,297 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+# Licencia Pública General GNU (GPL), versión 3 o posterior (ver LICENSE).
+"""Índices de precios para reexpresar informes (7.6).
+
+Fuentes oficiales (se consultan solo cuando el usuario lo pide):
+  - IPC: INE, «Total del País, índice general y variaciones, base Octubre 2022=100 (07/1937-)». Es una serie
+    ya empalmada por el INE desde 1937.
+  - IPPN: INE, «Índices general, en plaza y exportación…», base Octubre 2024=100. El IPPN es el antiguo IPM
+    del BCU: desde agosto de 2001 lo elabora el INE. La serie base 2024 empieza en octubre de 2024; para meses
+    anteriores, la serie base marzo 2010 (solo en formato .xls) se carga con «Importar planilla…».
+  - UI: BCU, servicio web de cotizaciones, código 9800 (Unidad Indexada, que sigue al IPC día a día). Se
+    guarda el último valor publicado de cada mes.
+Si el INE cambia las direcciones de los archivos, se corrigen en URLS o se usa «Importar planilla…».
+"""
+import calendar
+import csv
+import datetime as _dt
+import io
+import socket
+import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from .base import ErrorContable, fmt_fecha, parse_fecha
+from . import cotizaciones_bcu as bcu
+
+URLS = {
+    "IPC": "https://www5.ine.gub.uy/documents/Estadísticaseconómicas/SERIES Y OTROS/IPC/"
+           "Base Octubre 2022=100/IPC gral y variaciones_base 2022.xlsx",
+    "IPPN": "https://www5.ine.gub.uy/documents/Estadísticaseconómicas/SERIES Y OTROS/IPPN/"
+            "IPPN Nivel Gral, Seccion, División y Agrupación B2024.xlsx",
+}
+SERIES = {
+    "IPC": "IPC · Índice de Precios del Consumo (INE, base oct. 2022 = 100)",
+    "IPPN": "IPPN · Índice de Precios al Productor de Productos Nacionales (INE, base oct. 2024 = 100)",
+    "UI": "UI · Unidad Indexada (BCU, último valor de cada mes)",
+}
+UI_BCU = 9800
+MESES = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6, "jul": 7, "ago": 8, "set": 9, "sep": 9,
+         "oct": 10, "nov": 11, "dic": 12}
+
+
+class SinConexion(bcu.SinConexion):
+    pass
+
+
+# ------------------------------------------------------------------ lectura de planillas
+def _mes_de(v):
+    """AAAA-MM a partir de una fecha de Excel (número de serie o datetime) o de un texto como «Oct-24»,
+    «set-26», «2026-10», «10/2026» o «Octubre 2026». None si no es una fecha."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        return f"{v.year:04d}-{v.month:02d}"
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        if 3000 < v < 80000:                       # número de serie de Excel
+            d = _dt.date(1899, 12, 30) + _dt.timedelta(days=int(v))
+            return f"{d.year:04d}-{d.month:02d}"
+        return None
+    t = str(v).strip().lower().replace(".", "")
+    for sep in ("-", "/", " "):
+        partes = [p for p in t.split(sep) if p]
+        if len(partes) == 2:
+            a, b = partes
+            if a[:3] in MESES and b.isdigit():
+                anio = int(b) + (2000 if len(b) == 2 else 0)
+                return f"{anio:04d}-{MESES[a[:3]]:02d}"
+            if a.isdigit() and b.isdigit():
+                if len(a) == 4 and 1 <= int(b) <= 12:
+                    return f"{int(a):04d}-{int(b):02d}"
+                if len(b) == 4 and 1 <= int(a) <= 12:
+                    return f"{int(b):04d}-{int(a):02d}"
+    return None
+
+
+def _numero(v):
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    if isinstance(v, str):
+        t = v.strip().replace(" ", "")
+        if not t:
+            return None
+        if "," in t:
+            t = t.replace(".", "").replace(",", ".")
+        try:
+            return float(t)
+        except ValueError:
+            return None
+    return None
+
+
+def leer_filas(filas):
+    """De una lista de filas (listas de celdas) toma la columna de los meses y la del índice.
+    El encabezado es la fila que tiene una celda con «mes» («Mes y año», «Año y mes») y otra que empieza con
+    «Índice»; sin encabezado, se usa la primera columna con fechas y la primera numérica a su derecha.
+    Devuelve {AAAA-MM: valor}."""
+    col_fecha = col_valor = None
+    datos = {}
+    for fila in filas:
+        celdas = list(fila)
+        textos = [c.strip().lower() if isinstance(c, str) else "" for c in celdas]
+        if col_valor is None and any("mes" in t for t in textos):
+            indice = [j for j, t in enumerate(textos) if t.startswith(("índice", "indice", "número", "numero"))
+                      and "variaci" not in t]
+            if indice:
+                col_valor = indice[0]
+                col_fecha = next(j for j, t in enumerate(textos) if "mes" in t)
+                continue
+        if col_fecha is None:
+            col_fecha = next((j for j, c in enumerate(celdas[:3]) if _mes_de(c)), None)
+            if col_fecha is None:
+                continue
+        if col_fecha >= len(celdas):
+            continue
+        mes = _mes_de(celdas[col_fecha])
+        if not mes:
+            continue
+        j = col_valor if col_valor is not None else col_fecha + 1
+        if col_valor is None:
+            while j < len(celdas) and _numero(celdas[j]) is None:
+                j += 1
+        v = _numero(celdas[j]) if j < len(celdas) else None
+        if v is not None and v > 0:
+            datos[mes] = v
+    return datos
+
+
+def leer_planilla(contenido, nombre="planilla.xlsx"):
+    """Lee una planilla .xlsx o .csv (bytes o ruta) con un índice mensual."""
+    if isinstance(contenido, str):
+        nombre = contenido
+        with open(contenido, "rb") as f:
+            contenido = f.read()
+    ext = nombre.lower().rsplit(".", 1)[-1]
+    if ext in ("csv", "txt"):
+        texto = contenido.decode("utf-8-sig", errors="replace")
+        dialecto = ";" if texto.count(";") >= texto.count(",") else ","
+        return leer_filas(csv.reader(io.StringIO(texto), delimiter=dialecto))
+    if ext == "xls":
+        raise ErrorContable("Las planillas .xls (formato de Excel 97-2003) no se pueden leer. Ábrala en Excel o "
+                            "LibreOffice y guárdela como .xlsx, o como .csv con dos columnas: mes y valor.")
+    try:
+        import openpyxl
+    except ImportError:
+        raise ErrorContable("Para leer planillas de Excel instale openpyxl (ver LEEME).")
+    try:
+        libro = openpyxl.load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
+    except Exception as e:      # archivo dañado o que no es una planilla
+        raise ErrorContable(f"No se pudo leer la planilla ({e}).")
+    datos = {}
+    for hoja in libro.worksheets:
+        datos.update(leer_filas(hoja.iter_rows(values_only=True)))
+    if not datos:
+        raise ErrorContable("La planilla no tiene una columna de meses con su índice.")
+    return datos
+
+
+# ------------------------------------------------------------------ descargas
+def descargar_http(url, timeout=30):
+    partes = urllib.parse.urlsplit(url)
+    url = urllib.parse.urlunsplit(partes._replace(path=urllib.parse.quote(partes.path)))
+    try:
+        with urllib.request.urlopen(url, timeout=timeout, context=ssl.create_default_context()) as r:
+            return r.read()
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, ssl.SSLError) as e:
+        motivo = getattr(e, "reason", e)
+        raise SinConexion("No se pudo descargar el índice (sin conexión a internet o la página no responde). "
+                          "Puede cargarlo con «Importar planilla…».\nDetalle: " + str(motivo))
+
+
+def ui_del_bcu(desde, hasta, transporte=None):
+    """{AAAA-MM: último valor de la UI publicado en el mes} entre dos fechas (consultas de a un año)."""
+    d, h = _dt.date.fromisoformat(desde), _dt.date.fromisoformat(hasta)
+    datos = {}
+    while d <= h:
+        fin = min(h, d.replace(month=12, day=31))
+        for x in bcu.consultar([UI_BCU], d.isoformat(), fin.isoformat(), transporte):
+            if x["codigo"] == UI_BCU and x["fecha"]:
+                mes = x["fecha"][:7]
+                if mes not in datos or x["fecha"] >= datos[mes][0]:
+                    datos[mes] = (x["fecha"], x["tcc"])
+        d = fin + _dt.timedelta(days=1)
+    return {m: v for m, (_, v) in datos.items()}
+
+
+def mes_de_fecha(fecha):
+    return parse_fecha(fecha)[:7]
+
+
+def meses_entre(desde, hasta):
+    a, m = int(desde[:4]), int(desde[5:7])
+    out = []
+    while f"{a:04d}-{m:02d}" <= hasta:
+        out.append(f"{a:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            a, m = a + 1, 1
+    return out
+
+
+def texto_mes(mes):
+    nombres = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "octubre",
+               "noviembre", "diciembre"]
+    return f"{nombres[int(mes[5:7]) - 1]} de {mes[:4]}"
+
+
+# ------------------------------------------------------------------ en la base
+class IndicesMixin:
+    def guardar_indices(self, serie, valores, fuente):
+        serie = serie.strip().upper()
+        if not serie:
+            raise ErrorContable("Indique el nombre de la serie (por ejemplo IPC).")
+        previos = dict(self.con.execute("SELECT mes, valor FROM indices WHERE serie=?", (serie,)).fetchall())
+        nuevos = sum(1 for m in valores if m not in previos)
+        cambiados = sum(1 for m, v in valores.items() if m in previos and abs(previos[m] - v) > 1e-9)
+        with self.con:
+            self.con.executemany("INSERT OR REPLACE INTO indices(serie, mes, valor, fuente) VALUES (?,?,?,?)",
+                                 [(serie, m, float(v), fuente) for m, v in sorted(valores.items())])
+        return dict(serie=serie, nuevos=nuevos, cambiados=cambiados, total=len(valores),
+                    ultimo=max(valores) if valores else None)
+
+    def series_indices(self):
+        return self.con.execute("SELECT serie, COUNT(*) AS meses, MIN(mes) AS desde, MAX(mes) AS hasta, "
+                                "MAX(fuente) AS fuente FROM indices GROUP BY serie ORDER BY serie").fetchall()
+
+    def valores_indice(self, serie):
+        return dict(self.con.execute("SELECT mes, valor FROM indices WHERE serie=? ORDER BY mes",
+                                     (serie,)).fetchall())
+
+    def indice(self, serie, mes):
+        """(valor, mes usado): el del mes o, si todavía no se publicó, el último anterior. (None, None) si no hay."""
+        r = self.con.execute("SELECT valor, mes FROM indices WHERE serie=? AND mes<=? ORDER BY mes DESC LIMIT 1",
+                             (serie, mes)).fetchone()
+        return (r[0], r[1]) if r else (None, None)
+
+    def actualizar_indice(self, serie, descargar=None, transporte=None, hasta=None):
+        """Descarga la serie de su fuente oficial y la guarda. Devuelve el resumen de guardar_indices."""
+        serie = serie.upper()
+        if serie == "UI":
+            h = hasta or _dt.date.today().isoformat()
+            ultimo = self.con.execute("SELECT MAX(mes) FROM indices WHERE serie='UI'").fetchone()[0]
+            d = f"{ultimo}-01" if ultimo else f"{int(h[:4]) - 3}-01-01"
+            valores = ui_del_bcu(d, h, transporte)
+            fuente = "BCU, servicio web de cotizaciones (UI, código 9800)"
+        elif serie in URLS:
+            contenido = (descargar or descargar_http)(URLS[serie])
+            valores = leer_planilla(contenido, URLS[serie])
+            fuente = "INE, " + URLS[serie].rsplit("/", 1)[-1]
+        else:
+            raise ErrorContable(f"La serie {serie} no tiene fuente automática: cárguela con «Importar planilla…».")
+        if not valores:
+            raise ErrorContable(f"La fuente no devolvió valores de {serie}.")
+        return self.guardar_indices(serie, valores, fuente)
+
+    def importar_indice(self, serie, ruta):
+        valores = leer_planilla(ruta)
+        return self.guardar_indices(serie, valores, f"Importado de {ruta.replace(chr(92), '/').rsplit('/', 1)[-1]}")
+
+    def factores_reexpresion(self, serie, destino, desde_mes, hasta_mes):
+        """Factores índice(destino) / índice(mes) para cada mes entre desde_mes y hasta_mes (AAAA-MM).
+        Devuelve (factores, avisos, mes_destino_usado)."""
+        mes_dest = destino[:7]
+        v_dest, usado = self.indice(serie, mes_dest)
+        if v_dest is None:
+            raise ErrorContable(f"No hay valores de {serie} cargados hasta {texto_mes(mes_dest)}. Cárguelos en "
+                                "Consultas › Índices de precios… (botón «Actualizar desde la fuente»).")
+        avisos = []
+        if usado != mes_dest:
+            avisos.append(f"{serie} de {texto_mes(mes_dest)} todavía no está cargado: se usa el de {texto_mes(usado)}.")
+        factores, faltan, sustituidos = {}, [], []
+        for m in meses_entre(desde_mes, hasta_mes):
+            v, u = self.indice(serie, m)
+            if v is None:
+                faltan.append(m)
+                continue
+            if u != m:
+                sustituidos.append(m)
+            factores[m] = v_dest / v
+        if faltan:
+            raise ErrorContable(f"No hay valores de {serie} para {texto_mes(faltan[0])}"
+                                + (f" ni para otros {len(faltan) - 1} meses" if len(faltan) > 1 else "")
+                                + ". Cargue la serie desde una fecha anterior (Importar planilla…).")
+        if sustituidos:
+            avisos.append(f"Para {len(sustituidos)} mes(es) sin publicar se usó el último índice disponible.")
+        factores["ultimo"] = factores[max(factores)] if factores else 1.0
+        return factores, avisos, usado
+
+
+def fin_de_mes(mes):
+    a, m = int(mes[:4]), int(mes[5:7])
+    return f"{mes}-{calendar.monthrange(a, m)[1]:02d}"
+
+
+__all__ = ["IndicesMixin", "SERIES", "URLS", "leer_planilla", "leer_filas", "ui_del_bcu", "SinConexion",
+           "meses_entre", "texto_mes", "fin_de_mes", "fmt_fecha"]

@@ -1,0 +1,397 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+# Licencia Pública General GNU (GPL), versión 3 o posterior (ver LICENSE).
+
+"""Plan de cuentas propio de cada empresa: planilla para completarlo, exportación e importación desde Excel."""
+import csv
+import sqlite3
+
+from . import plan_modelo as pm
+from .base import ErrorContable
+
+COLUMNAS_PLAN = ["Código", "Nombre", "Con movimiento", "Saldo normal", "Sección EEFF", "Moneda", "Auxiliar",
+                 "Centro de costos", "Local", "Descripción"]
+CLAVES_PLAN = ["codigo", "nombre", "imputable", "naturaleza", "seccion", "moneda", "auxiliar", "cc", "local",
+               "descripcion"]
+ALIAS_PLAN = {
+    "codigo": ["codigo", "cod", "cuenta", "nro", "numero"],
+    "nombre": ["nombre", "denominacion", "descripcion de la cuenta", "cuenta nombre"],
+    "imputable": ["con movimiento", "imputable", "movimiento", "recibe movimientos", "tipo"],
+    "naturaleza": ["saldo normal", "saldo", "naturaleza"],
+    "seccion": ["seccion eeff", "seccion", "seccion ef", "estado financiero"],
+    "moneda": ["moneda"],
+    "auxiliar": ["auxiliar"],
+    "cc": ["centro de costos", "centro", "cc"],
+    "local": ["local", "sucursal"],
+    "descripcion": ["descripcion", "observaciones", "notas"],
+}
+
+
+def _clave(t):
+    import unicodedata
+    t = unicodedata.normalize("NFD", str(t or "").strip().lower())
+    return "".join(c for c in t if unicodedata.category(c) != "Mn").replace("_", " ").replace(".", "").strip()
+
+
+def _txt(v):
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return str(v).strip()
+
+
+SI = {"s", "si", "x", "1", "true", "verdadero", "cuenta", "imputable", "con movimiento"}
+NO = {"n", "no", "0", "false", "falso", "rubro", "titulo"}
+
+
+class ErrorPlan(ErrorContable):
+    """Errores de la planilla del plan: lista de (fila, código, mensaje)."""
+
+    def __init__(self, errores):
+        self.errores = errores
+        super().__init__(f"La planilla tiene {len(errores)} errores. No se importó nada.")
+
+
+class PlanMixin:
+    # ------------------------------------------------------------- lectura
+    @staticmethod
+    def leer_planilla_plan(ruta):
+        """Devuelve [(n° de fila, {clave: texto})] de la hoja «Plan de cuentas» (o la primera) o de un CSV."""
+        if ruta.lower().endswith((".xlsx", ".xlsm")):
+            try:
+                from openpyxl import load_workbook
+            except ImportError:
+                raise ErrorContable("Para leer planillas Excel falta la librería openpyxl (ejecute instalar.bat).")
+            wb = load_workbook(ruta, read_only=True, data_only=True)
+            hoja = wb["Plan de cuentas"] if "Plan de cuentas" in wb.sheetnames else wb.worksheets[0]
+            crudas = [list(r) for r in hoja.iter_rows(values_only=True)]
+        else:
+            with open(ruta, encoding="utf-8-sig", newline="") as f:
+                muestra = f.read(4096)
+                f.seek(0)
+                sep = ";" if muestra.count(";") >= muestra.count(",") else ","
+                crudas = [r for r in csv.reader(f, delimiter=sep)]
+        mapa = {a: k for k, lista in ALIAS_PLAN.items() for a in lista}
+        for i, fila in enumerate(crudas):
+            claves = [mapa.get(_clave(c)) for c in fila]
+            if "codigo" in claves and "nombre" in claves:
+                titulos, inicio = claves, i + 1
+                break
+        else:
+            raise ErrorContable("No se encontró la fila de títulos: la planilla debe tener al menos las columnas "
+                                "«Código» y «Nombre» (descargue la planilla modelo).")
+        filas = []
+        for n, fila in enumerate(crudas[inicio:], inicio + 1):
+            d = {}
+            for k, v in zip(titulos, fila):
+                if k and k not in d:
+                    d[k] = _txt(v)
+            if any(d.values()):
+                filas.append((n, d))
+        return filas
+
+    # ------------------------------------------------------------- interpretación de cada fila
+    def _fila_plan(self, emp, d, codigos_archivo, crear_dims=True):
+        codigo = d.get("codigo", "").replace(".", "").replace(" ", "")
+        nombre = d.get("nombre", "")
+        if not codigo:
+            raise ErrorContable("falta el código")
+        if not nombre:
+            raise ErrorContable("falta el nombre")
+        imp = _clave(d.get("imputable", ""))
+        if imp in SI:
+            imputable = True
+        elif imp in NO:
+            imputable = False
+        elif imp == "":
+            # sin indicar: es cuenta con movimiento si no tiene subcuentas (en el archivo o en el plan)
+            imputable = not any(c != codigo and c.startswith(codigo) for c in codigos_archivo) and len(codigo) > 1
+        else:
+            raise ErrorContable(f"«Con movimiento» debe ser S o N (dice «{d.get('imputable')}»)")
+        nat = _clave(d.get("naturaleza", ""))
+        naturaleza = {"d": "D", "deudor": "D", "deudora": "D", "a": "A", "acreedor": "A", "acreedora": "A",
+                      "h": "A", "": None}.get(nat, "?")
+        if naturaleza == "?":
+            raise ErrorContable(f"«Saldo normal» debe ser D (deudor) o A (acreedor) (dice «{d.get('naturaleza')}»)")
+        sec = d.get("seccion", "")
+        seccion = None
+        if sec:
+            por_nombre = {_clave(v): k for k, v in pm.SECCIONES.items()}
+            seccion = sec.upper() if sec.upper() in pm.SECCIONES else por_nombre.get(_clave(sec))
+            if not seccion:
+                raise ErrorContable(f"sección de estados financieros desconocida: «{sec}» (vea la hoja Secciones)")
+        moneda = d.get("moneda", "").upper() or None
+        if moneda in ("$", "PESOS"):
+            moneda = "UYU"
+        if moneda == self.empresa(emp)["moneda_nacional"]:      # la moneda funcional no es extranjera
+            moneda = None
+        if moneda and not self.moneda(moneda):
+            raise ErrorContable(f"la moneda {moneda} no está dada de alta (Configuración › Monedas y cotizaciones)")
+        aux = _clave(d.get("auxiliar", ""))
+        auxiliar = {"c": "C", "cliente": "C", "clientes": "C", "p": "P", "proveedor": "P", "proveedores": "P",
+                    "": None}.get(aux, "?")
+        if auxiliar == "?":
+            raise ErrorContable(f"«Auxiliar» debe ser C (clientes) o P (proveedores) (dice «{d.get('auxiliar')}»)")
+
+        def dim(tabla, valor, que):
+            if not valor:
+                return None
+            r = self.con.execute(f"SELECT id FROM {tabla} WHERE empresa_id=? AND codigo=?", (emp, valor)).fetchone()
+            if not r and crear_dims:
+                guardar = self.guardar_centro_costo if tabla == "centros_costo" else self.guardar_local
+                guardar(emp, valor, valor)
+                self._dims_creadas.append(f"{que.split(' ', 1)[1]} {valor}")
+                r = self.con.execute(f"SELECT id FROM {tabla} WHERE empresa_id=? AND codigo=?",
+                                     (emp, valor)).fetchone()
+            if not r:
+                raise ErrorContable(f"{que} «{valor}» no existe (créelo en Configuración › Locales y centros de costos)")
+            return r[0]
+        return dict(codigo=codigo, nombre=nombre, imputable=imputable, naturaleza=naturaleza, seccion=seccion,
+                    moneda=moneda, auxiliar=auxiliar, cc_id=dim("centros_costo", d.get("cc"), "el centro de costos"),
+                    local_id=dim("locales", d.get("local"), "el local"), descripcion=d.get("descripcion", ""))
+
+    def _aplicar_plan(self, emp, filas, actualizar, crear_dims=True):
+        """Crea o actualiza las cuentas. Devuelve (creadas, actualizadas, iguales, errores)."""
+        from .contabilidad import MANTENER
+        codigos = {d.get("codigo", "").replace(".", "").replace(" ", "") for _, d in filas}
+        codigos |= {c["codigo"] for c in self.cuentas(emp)}
+        orden = sorted(filas, key=lambda x: (len(x[1].get("codigo", "")), x[1].get("codigo", "")))
+        vistos, creadas, actualizadas, iguales, errores = set(), 0, 0, 0, []
+        fallidos = set()
+        self._dims_creadas = []
+        for n, d in orden:
+            cod = d.get("codigo", "").replace(".", "").replace(" ", "")
+            if any(cod.startswith(f) and cod != f for f in fallidos):
+                fallidos.add(cod)      # su rubro superior tiene error: no se repite el aviso
+                continue
+            try:
+                c = self._fila_plan(emp, d, codigos, crear_dims)
+                if c["codigo"] in vistos:
+                    raise ErrorContable("el código está repetido en la planilla")
+                vistos.add(c["codigo"])
+                actual = self.cuenta_por_codigo(emp, c["codigo"])
+                if not actual:
+                    self.crear_cuenta(emp, c["codigo"], c["nombre"], c["imputable"], c["naturaleza"], c["seccion"],
+                                      c["descripcion"], c["moneda"], c["local_id"], c["cc_id"], c["auxiliar"])
+                    creadas += 1
+                elif actualizar:
+                    # en las celdas vacías se conserva lo que la cuenta ya tenía
+                    nuevo = dict(
+                        nombre=c["nombre"],
+                        imputable=c["imputable"] if d.get("imputable") else bool(actual["imputable"]),
+                        naturaleza=c["naturaleza"] or actual["naturaleza"],
+                        seccion=c["seccion"] if d.get("seccion") else actual["seccion"],
+                        descripcion=c["descripcion"] if d.get("descripcion") else (actual["descripcion"] or ""),
+                        moneda=c["moneda"] if d.get("moneda") else actual["moneda"],
+                        local_id=c["local_id"] if d.get("local") else actual["local_id"],
+                        cc_id=c["cc_id"] if d.get("cc") else actual["cc_id"],
+                        auxiliar=c["auxiliar"] if d.get("auxiliar") else MANTENER)
+                    viejo = dict(nombre=actual["nombre"], imputable=bool(actual["imputable"]),
+                                 naturaleza=actual["naturaleza"], seccion=actual["seccion"],
+                                 descripcion=actual["descripcion"] or "", moneda=actual["moneda"],
+                                 local_id=actual["local_id"], cc_id=actual["cc_id"])
+                    aux_igual = nuevo["auxiliar"] is MANTENER or nuevo["auxiliar"] == actual["auxiliar"]
+                    if all(nuevo[k] == viejo[k] for k in viejo) and aux_igual:
+                        iguales += 1
+                    else:
+                        self.modificar_cuenta(actual["id"], c["codigo"], **nuevo)
+                        actualizadas += 1
+                else:
+                    iguales += 1
+            except ErrorContable as e:
+                errores.append((n, d.get("codigo", ""), str(e)))
+                fallidos.add(cod)
+        return creadas, actualizadas, iguales, errores
+
+    def importar_plan(self, emp, ruta=None, actualizar=False, filas=None, crear_dims=True):
+        """Importa el plan de cuentas desde una planilla. Primero se ensaya sobre una copia en memoria:
+        si hay algún error no se importa nada. Devuelve (creadas, actualizadas, sin cambios)."""
+        filas = filas if filas is not None else self.leer_planilla_plan(ruta)
+        if not filas:
+            raise ErrorContable("La planilla no tiene cuentas.")
+        if not self.cuentas(emp):
+            self._ajustar_estructura(emp, filas)
+        copia = sqlite3.connect(":memory:")
+        self.con.backup(copia)
+        copia.row_factory = sqlite3.Row
+        copia.execute("PRAGMA foreign_keys = ON")
+        ensayo = type(self)(copia)
+        *_, errores = ensayo._aplicar_plan(emp, filas, actualizar, crear_dims)
+        copia.close()
+        if errores:
+            raise ErrorPlan(sorted(errores))
+        creadas, actualizadas, iguales, errores = self._aplicar_plan(emp, filas, actualizar, crear_dims)
+        if errores:      # no debería pasar: el ensayo dio bien
+            raise ErrorPlan(errores)
+        self._fijar_dif_cambio_si_falta(emp)
+        return creadas, actualizadas, iguales
+
+    def _ajustar_estructura(self, emp, filas):
+        """Empresa sin cuentas: si los códigos de la planilla no encajan en su estructura de niveles,
+        la estructura se toma de la planilla (por ejemplo, al copiar un plan 1-1-2-2-2)."""
+        largos = sorted({len(d.get("codigo", "").replace(".", "").replace(" ", "")) for _, d in filas} - {0})
+        if not largos or largos[0] != 1:
+            return
+        estructura = "-".join(str(b - a) for a, b in zip([0] + largos, largos))
+        actual = self.empresa(emp)["estructura"]
+        acum, n = set(), 0
+        for p in actual.split("-"):
+            n += int(p)
+            acum.add(n)
+        if set(largos) <= acum or estructura == actual:
+            return
+        self.con.execute("UPDATE empresas SET estructura=? WHERE id=?", (estructura, emp))
+        self.con.commit()
+
+    def _fijar_dif_cambio_si_falta(self, emp):
+        e = self.empresa(emp)
+        if e["cta_dif_ganada"] or e["cta_dif_perdida"]:
+            return
+        g, p = self.cuenta_por_codigo(emp, "4313"), self.cuenta_por_codigo(emp, "5414")
+        if not (g and p and "cambio" in g["nombre"].lower() and "cambio" in p["nombre"].lower()):
+            # otro plan: se buscan por nombre («Diferencia de cambio ganada / perdida»)
+            ctas = [c for c in self.cuentas(emp) if c["imputable"] and "cambio" in _clave(c["nombre"])]
+            g = next((c for c in ctas if c["codigo"][0] == "4" and "ganad" in _clave(c["nombre"])), None)
+            p = next((c for c in ctas if c["codigo"][0] == "5" and "perdid" in _clave(c["nombre"])), None)
+        if g and p and g["imputable"] and p["imputable"]:
+            with self.con:
+                self.con.execute("UPDATE empresas SET cta_dif_ganada=?, cta_dif_perdida=? WHERE id=?",
+                                 (g["id"], p["id"], emp))
+
+    def informe_errores_plan(self, emp, errores, archivo):
+        from .base import Reporte
+        rep = Reporte("Errores en la planilla del plan de cuentas",
+                      self._subtitulo(emp, f"Archivo: {archivo} · No se importó nada"),
+                      [("Fila", "texto", 6), ("Código", "texto", 12), ("Error", "texto", 80)])
+        for n, cod, msg in errores:
+            rep.agregar([str(n), cod, msg], "alerta")
+        rep.notas.append("Corrija la planilla y vuelva a importarla. «Fila» es el número de fila de Excel.")
+        return rep
+
+    # ------------------------------------------------------------- escritura
+    def _filas_plan(self, emp):
+        locs = {x["id"]: x["codigo"] for x in self.locales(emp)}
+        ccs = {x["id"]: x["codigo"] for x in self.centros_costo(emp)}
+        return [[c["codigo"], c["nombre"], "S" if c["imputable"] else "N", c["naturaleza"], c["seccion"] or "",
+                 c["moneda"] or "", c["auxiliar"] or "", ccs.get(c["cc_id"], ""), locs.get(c["local_id"], ""),
+                 c["descripcion"] or ""] for c in self.cuentas(emp)]
+
+    def exportar_plan(self, emp, ruta, plantilla=False):
+        """Guarda el plan de la empresa (o, con 'plantilla', una planilla para completar) en el formato que se importa."""
+        if ruta.lower().endswith(".csv"):
+            with open(ruta, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f, delimiter=";")
+                w.writerow(COLUMNAS_PLAN)
+                for fila in ([] if plantilla else self._filas_plan(emp)):
+                    w.writerow(fila)
+            return ruta
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Alignment, Font, PatternFill
+            from openpyxl.worksheet.datavalidation import DataValidation
+        except ImportError:
+            raise ErrorContable("Para crear la planilla falta la librería openpyxl (ejecute instalar.bat).")
+        e = self.empresa(emp) if emp else None
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Plan de cuentas"
+        ws.append(COLUMNAS_PLAN)
+        cab = PatternFill("solid", fgColor="DDE3EA")
+        for c in ws[1]:
+            c.font = Font(bold=True)
+            c.fill = cab
+            c.alignment = Alignment(wrap_text=True, vertical="center")
+        if plantilla:
+            ejemplo = [
+                ["1", "ACTIVO", "N", "D", "", "", "", "", "", ""],
+                ["11", "Activo corriente", "N", "D", "AC", "", "", "", "", ""],
+                ["111", "Disponibilidades", "N", "D", "", "", "", "", "", ""],
+                ["1111", "Caja", "S", "", "", "", "", "", "", "Efectivo en pesos"],
+                ["1112", "Banco cuenta corriente", "S", "", "", "", "", "", "", ""],
+                ["112", "Créditos por ventas", "N", "D", "", "", "", "", "", ""],
+                ["1121", "Deudores por ventas", "S", "", "", "", "C", "", "", "Con detalle por cliente"],
+                ["2", "PASIVO", "N", "A", "", "", "", "", "", ""],
+                ["21", "Pasivo corriente", "N", "A", "PC", "", "", "", "", ""],
+                ["211", "Deudas comerciales", "N", "A", "", "", "", "", "", ""],
+                ["2111", "Proveedores", "S", "", "", "", "P", "", "", "Con detalle por proveedor"],
+                ["3", "PATRIMONIO", "N", "A", "PAT", "", "", "", "", ""],
+                ["31", "Capital", "N", "A", "", "", "", "", "", ""],
+                ["311", "Capital integrado", "N", "A", "", "", "", "", "", ""],
+                ["3111", "Capital", "S", "", "", "", "", "", "", ""],
+                ["4", "INGRESOS", "N", "A", "", "", "", "", "", ""],
+                ["41", "Ingresos operativos", "N", "A", "ING", "", "", "", "", ""],
+                ["411", "Ventas", "N", "A", "", "", "", "", "", ""],
+                ["4111", "Ventas de mercaderías", "S", "", "", "", "", "", "", ""],
+                ["5", "GASTOS", "N", "D", "", "", "", "", "", ""],
+                ["51", "Costo de ventas", "N", "D", "CV", "", "", "", "", ""],
+                ["511", "Costo de las mercaderías vendidas", "N", "D", "", "", "", "", "", ""],
+                ["5111", "Costo de ventas", "S", "", "", "", "", "", "", ""],
+            ]
+            for f in ejemplo:
+                ws.append(f)
+        else:
+            for f in self._filas_plan(emp):
+                ws.append(f)
+        for col, ancho in zip("ABCDEFGHIJ", (10, 42, 15, 12, 14, 9, 9, 15, 9, 40)):
+            ws.column_dimensions[col].width = ancho
+        ws.freeze_panes = "A2"
+        n = max(ws.max_row, 2000)
+        for rango, opciones, titulo in (
+                (f"C2:C{n}", '"S,N"', "S = cuenta con movimiento; N = rubro"),
+                (f"D2:D{n}", '"D,A"', "D = saldo deudor; A = saldo acreedor; vacío = según el grupo"),
+                (f"E2:E{n}", f'"{",".join(pm.SECCIONES)}"', "Código de la sección (hoja Secciones)"),
+                (f"G2:G{n}", '"C,P"', "C = clientes; P = proveedores")):
+            dv = DataValidation(type="list", formula1=opciones, allow_blank=True, promptTitle="Valores posibles",
+                                prompt=titulo, showInputMessage=True)
+            ws.add_data_validation(dv)
+            dv.add(rango)
+        wi = wb.create_sheet("Instrucciones")
+        estructura = e["estructura"] if e else "1-1-1-1"
+        largos = self.longitudes(estructura)
+        for t in [
+            "PLAN DE CUENTAS — Partida Doble",
+            "",
+            f"Empresa: {e['codigo']} {e['nombre']} · estructura de niveles {estructura} (códigos de "
+            f"{', '.join(map(str, largos))} dígitos)" if e else "Estructura de niveles 1-1-1-1 (códigos de 1, 2, 3 y 4 dígitos)",
+            "",
+            "1. Una fila por cuenta o rubro, en la hoja «Plan de cuentas». El orden de las filas no importa.",
+            "2. Código: solo números. El primer dígito es el grupo: 1 Activo, 2 Pasivo, 3 Patrimonio, 4 Ingresos,",
+            "   5 Gastos, 6 Cuentas de orden. Cada código debe tener su rubro superior (para 1111, debe existir 111).",
+            "3. Con movimiento: S para las cuentas que reciben asientos, N para los rubros que agrupan.",
+            "   Si se deja vacío: es S cuando la cuenta no tiene subcuentas.",
+            "4. Saldo normal: D (deudor) o A (acreedor). Vacío: según el grupo (1, 5 y 6 deudor; 2, 3 y 4 acreedor).",
+            "5. Sección EEFF: en qué parte de los estados contables se presenta (hoja «Secciones»). Basta con",
+            "   indicarla en el rubro: las subcuentas la heredan.",
+            "6. Moneda: vacío para pesos; USD, EUR, etc. para cuentas en moneda extranjera (deben existir en el programa).",
+            "7. Auxiliar: C si la cuenta lleva detalle por cliente, P si lleva detalle por proveedor.",
+            "8. Centro de costos y Local: códigos ya creados en el programa (opcionales).",
+            "",
+            "Si un centro de costos o un local no existe, el programa lo crea con el código como nombre.",
+            "Al importar, el programa revisa toda la planilla. Si hay errores, los informa con el número de fila",
+            "y no importa nada. Las cuentas que ya existen se dejan como están, salvo que se elija «actualizar».",
+            "Este mismo formato es el que produce «Exportar plan a Excel»: sirve para copiar el plan a otra empresa.",
+        ]:
+            wi.append([t])
+        wi["A1"].font = Font(bold=True, size=13)
+        wi.column_dimensions["A"].width = 110
+        wsec = wb.create_sheet("Secciones")
+        wsec.append(["Código", "Sección de los estados contables"])
+        for c in wsec[1]:
+            c.font = Font(bold=True)
+        for k, v in pm.SECCIONES.items():
+            wsec.append([k, v])
+        wsec.column_dimensions["B"].width = 45
+        wb.save(ruta)
+        return ruta
+
+    def plantilla_plan(self, emp, ruta):
+        return self.exportar_plan(emp, ruta, plantilla=True)
+
+    def cargar_plan_desde_modelo(self, emp):
+        """Agrega las cuentas del plan modelo del programa que falten (solo estructura 1-1-1-1)."""
+        if self.empresa(emp)["estructura"] != "1-1-1-1":
+            raise ErrorContable("El plan modelo del programa usa la estructura 1-1-1-1.")
+        antes = len(self.cuentas(emp))
+        self.cargar_plan_modelo(emp)
+        return len(self.cuentas(emp)) - antes

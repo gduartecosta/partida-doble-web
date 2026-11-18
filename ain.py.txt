@@ -1,0 +1,244 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+# Licencia Pública General GNU (GPL), versión 3 o posterior (ver LICENSE).
+"""Ficha de la empresa según la hoja «InformacionGeneral» del Formulario E de la Auditoría Interna de la
+Nación (Decreto 108/007), filas 12 a 33, con los valores posibles de la hoja oculta «Lists» y de las columnas
+auxiliares del formulario.
+
+Los textos de las listas (departamentos, tipos societarios) se guardan tal como los escribe la AIN, sin
+corregir tildes, para poder exportarlos después al formulario sin traducción.
+"""
+import calendar
+import csv
+import datetime as _dt
+import os
+import re
+import unicodedata
+
+from .base import ErrorContable, parse_fecha
+
+RUTA_CIIU = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datos", "ciiu.csv")
+
+NATURALEZAS = ["Individual", "Grupo"]                                  # fila 15 (F13:F14)
+MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre",
+         "Octubre", "Noviembre", "Diciembre"]                           # fila 17 (F16:F27)
+# filas 20 y 21 (F34:G39): monedas de presentación y funcional que admite el formulario
+MONEDAS_AIN = [("UYU", "Peso Uruguayo"), ("ARS", "Peso Argentino"), ("BRL", "Real Brasileño"),
+               ("USD", "Dolar US"), ("EUR", "Euro"), ("CLP", "Peso Chileno")]
+# nombre con que se da de alta la moneda si todavía no existe en la base, y plural para los informes
+MONEDAS_ALTA = {"UYU": ("Peso uruguayo", "$", "pesos uruguayos"), "ARS": ("Peso argentino", "AR$", "pesos argentinos"),
+                "BRL": ("Real brasileño", "R$", "reales"), "USD": ("Dólar estadounidense", "U$S", "dólares estadounidenses"),
+                "EUR": ("Euro", "€", "euros"), "CLP": ("Peso chileno", "CLP$", "pesos chilenos")}
+REDONDEOS = ["Unidades"]                                               # fila 22 (F40)
+SI_NO = ["Sí", "No"]                                                   # filas 28 y 30 (F29:F30)
+DEPARTAMENTOS = ["Artigas", "Salto", "Paysandu", "Rio Negro", "Soriano", "Colonia", "Rivera", "Tacuarembo",
+                 "Cerro Largo", "Lavalleja", "Treinta y Tres", "Rocha", "Maldonado", "Montevideo", "Flores",
+                 "Florida", "Durazno", "San Jose", "Canelones"]         # fila 26 (E38:E56)
+TIPOS_SOCIETARIOS = [
+    "S.A", "S.A.S. (Sociedad por Acciones Simplificada)", "S.R.L", "Sociedad Colectiva", "Sociedad de Hecho",
+    "Sociedad Comandita", "IAMPP", "Cooperativas", "Fundaciones", "Sociedad Civil", "Asociacion Civil",
+    "Sociedad Agraria", "Asociacion Agraria", "Fideicomiso", "Entes autónomos y servicios descentralizados",
+    "Otras Entidades Públicas o con participación estatal", "Entidad Pluripersonal no residente", "Otros"]  # fila 32
+
+# (campo en la tabla empresas, fila del formulario, título en pantalla)
+CAMPOS = [
+    ("nombre", 12, "Denominación de la entidad"),
+    ("nombre_fantasia", 13, "Nombre de fantasía"),
+    ("cambio_nombre", 14, "Cambio de nombre desde el ejercicio anterior (explicación)"),
+    ("naturaleza", 15, "Naturaleza de los estados (individual o grupo)"),
+    ("anio_cierre", 16, "Año de cierre"),
+    ("mes_cierre", 17, "Mes de cierre"),
+    ("meses_cubiertos", 18, "Meses cubiertos por los estados"),
+    ("meses_anterior", 19, "Meses cubiertos por el período anterior"),
+    ("moneda_presentacion", 20, "Moneda de presentación"),
+    ("moneda_nacional", 21, "Moneda funcional"),
+    ("redondeo", 22, "Grado de redondeo"),
+    ("rut", 23, "RUT"),
+    ("ciiu", 24, "CIIU (actividad)"),
+    ("domicilio_fiscal", 25, "Domicilio fiscal"),
+    ("departamento", 26, "Departamento"),
+    ("fecha_autorizacion", 27, "Fecha de autorización para la publicación"),
+    ("aprobado_asamblea", 28, "Aprobados por asamblea"),
+    ("fecha_asamblea", 29, "Fecha de aprobación por asamblea"),
+    ("auditoria_externa", 30, "Informe de auditoría externa"),
+    ("giro", 31, "Giro"),
+    ("tipo_societario", 32, "Tipo societario"),
+    ("empleados", 33, "Número de empleados"),
+]
+
+# columnas nuevas de la tabla empresas (versión 7.6); año y mes de cierre se calculan
+COLUMNAS_FICHA = [
+    ("nombre_fantasia", "TEXT"), ("cambio_nombre", "TEXT"), ("naturaleza", "TEXT"),
+    ("meses_cubiertos", "INTEGER"), ("meses_anterior", "INTEGER"), ("moneda_presentacion", "TEXT"),
+    ("redondeo", "TEXT"), ("ciiu", "TEXT"), ("giro", "TEXT"), ("domicilio_fiscal", "TEXT"),
+    ("departamento", "TEXT"), ("fecha_autorizacion", "TEXT"), ("aprobado_asamblea", "INTEGER"),
+    ("fecha_asamblea", "TEXT"), ("auditoria_externa", "INTEGER"), ("tipo_societario", "TEXT"),
+    ("empleados", "INTEGER"),
+]
+CAMPOS_FICHA = [c for c, _ in COLUMNAS_FICHA]
+
+
+# ------------------------------------------------------------------ ISO 4217
+RUTA_ISO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datos", "iso4217.csv")
+_ISO = None
+
+
+def iso4217():
+    """Lista de dict(codigo, nombre, decimales) de las monedas vigentes de la norma ISO 4217."""
+    global _ISO
+    if _ISO is None:
+        with open(RUTA_ISO, encoding="utf-8", newline="") as f:
+            _ISO = [dict(r, decimales=int(r["decimales"]) if r["decimales"].isdigit() else 2)
+                    for r in csv.DictReader(f, delimiter=";")]
+    return _ISO
+
+
+def moneda_iso(codigo):
+    return next((m for m in iso4217() if m["codigo"] == (codigo or "").strip().upper()), None)
+
+
+# ------------------------------------------------------------------ CIIU
+_CIIU = None
+
+
+def ciiu():
+    """Lista de dict(seccion, codigo, descripcion, giro), en el orden del formulario."""
+    global _CIIU
+    if _CIIU is None:
+        with open(RUTA_CIIU, encoding="utf-8", newline="") as f:
+            _CIIU = list(csv.DictReader(f, delimiter=";"))
+    return _CIIU
+
+
+def ciiu_por_codigo(codigo):
+    cod = normalizar_ciiu(codigo)
+    return next((c for c in ciiu() if c["codigo"] == cod), None) if cod else None
+
+
+def normalizar_ciiu(codigo):
+    t = re.sub(r"\D", "", str(codigo or ""))
+    return t.zfill(5) if t and len(t) <= 5 else (t or None)
+
+
+def _clave(t):
+    t = unicodedata.normalize("NFKD", (t or "").lower())
+    return "".join(ch for ch in t if not unicodedata.combining(ch))
+
+
+def buscar_ciiu(texto, limite=None):
+    """Busca por código (completo o comienzo) o por palabras de la descripción o del giro, sin importar
+    mayúsculas ni tildes. Todas las palabras tienen que aparecer."""
+    texto = (texto or "").strip()
+    if not texto:
+        out = ciiu()
+    elif re.fullmatch(r"\d+", texto):
+        out = [c for c in ciiu() if c["codigo"].startswith(texto) or c["codigo"].lstrip("0").startswith(texto)]
+    else:
+        palabras = _clave(texto).split()
+        out = [c for c in ciiu()
+               if all(p in _clave(c["descripcion"] + " " + c["giro"] + " " + c["seccion"]) for p in palabras)]
+    return out[:limite] if limite else out
+
+
+# ---------------------------------------------------------- ejercicio
+def sumar_meses(fecha, meses):
+    y, m = divmod(fecha.month - 1 + meses, 12)
+    anio, mes = fecha.year + y, m + 1
+    return _dt.date(anio, mes, min(fecha.day, calendar.monthrange(anio, mes)[1]))
+
+
+def cierre_desde_inicio(inicio, meses=12):
+    """Último día del mes en que termina un ejercicio de «meses» meses que empieza en «inicio»
+    (como el formulario: FIN.MES)."""
+    ini = _dt.date.fromisoformat(parse_fecha(inicio) if not isinstance(inicio, _dt.date) else inicio.isoformat())
+    meses = int(meses or 12)
+    fin = sumar_meses(ini.replace(day=1), meses - 1)
+    return fin.replace(day=calendar.monthrange(fin.year, fin.month)[1]).isoformat()
+
+
+def meses_entre(inicio, cierre):
+    """Meses cubiertos por un ejercicio ya cargado (se usa con empresas de versiones anteriores)."""
+    if not inicio or not cierre:
+        return None
+    a, b = _dt.date.fromisoformat(inicio), _dt.date.fromisoformat(cierre)
+    return (b.year - a.year) * 12 + b.month - a.month + 1
+
+
+def anio_mes_cierre(cierre):
+    if not cierre:
+        return None, None
+    d = _dt.date.fromisoformat(cierre)
+    return d.year, MESES[d.month - 1]
+
+
+# ----------------------------------------------------------- validación
+def _entero(valor, nombre, minimo, maximo):
+    if valor in (None, ""):
+        return None
+    try:
+        n = int(str(valor).strip())
+    except ValueError:
+        raise ErrorContable(f"{nombre}: escriba un número entero.")
+    if not minimo <= n <= maximo:
+        raise ErrorContable(f"{nombre}: el valor debe estar entre {minimo} y {maximo:,}".replace(",", ".") + ".")
+    return n
+
+
+def _opcion(valor, lista, nombre):
+    valor = (valor or "").strip()
+    if not valor:
+        return None
+    for v in lista:
+        if _clave(v) == _clave(valor):
+            return v
+    raise ErrorContable(f"{nombre}: «{valor}» no es uno de los valores del formulario de la AIN.")
+
+
+def _si_no(valor):
+    if valor in (None, ""):
+        return None
+    if isinstance(valor, (bool, int)):
+        return int(bool(valor))
+    return {"si": 1, "sí": 1, "s": 1, "no": 0, "n": 0}.get(_clave(str(valor)).strip(), None)
+
+
+def validar_ficha(datos, cierre=None):
+    """Limpia y valida los campos de la ficha (todos opcionales). Devuelve un dict con las columnas de
+    COLUMNAS_FICHA. «cierre» es la fecha de cierre del ejercicio (AAAA-MM-DD), para controlar las fechas."""
+    d = {k: (v.strip() if isinstance(v, str) else v) for k, v in datos.items()}
+    out = {c: None for c in CAMPOS_FICHA}
+    for c in ("nombre_fantasia", "cambio_nombre", "domicilio_fiscal"):
+        out[c] = d.get(c) or None
+    out["naturaleza"] = _opcion(d.get("naturaleza"), NATURALEZAS, "Naturaleza")
+    out["meses_cubiertos"] = _entero(d.get("meses_cubiertos"), "Meses cubiertos", 1, 12)
+    out["meses_anterior"] = _entero(d.get("meses_anterior"), "Meses del período anterior", 1, 12)
+    codigos = [c for c, _ in MONEDAS_AIN]
+    mp = (d.get("moneda_presentacion") or "").upper()[:3] or None
+    if mp and mp not in codigos:
+        raise ErrorContable(f"Moneda de presentación: el formulario de la AIN admite {', '.join(codigos)}.")
+    out["moneda_presentacion"] = mp
+    out["redondeo"] = _opcion(d.get("redondeo"), REDONDEOS, "Grado de redondeo")
+    cod = normalizar_ciiu(d.get("ciiu"))
+    if cod:
+        fila = ciiu_por_codigo(cod)
+        if not fila:
+            raise ErrorContable(f"CIIU: el código {cod} no está en la tabla del formulario de la AIN.")
+        out["ciiu"], out["giro"] = fila["codigo"], fila["giro"]
+    out["departamento"] = _opcion(d.get("departamento"), DEPARTAMENTOS, "Departamento")
+    out["tipo_societario"] = _opcion(d.get("tipo_societario"), TIPOS_SOCIETARIOS, "Tipo societario")
+    out["empleados"] = _entero(d.get("empleados"), "Número de empleados", 1, 10_000_000)
+    out["auditoria_externa"] = _si_no(d.get("auditoria_externa"))
+    fa = parse_fecha(d["fecha_autorizacion"]) if d.get("fecha_autorizacion") else None
+    fx = parse_fecha(d["fecha_asamblea"]) if d.get("fecha_asamblea") else None
+    aprobado = _si_no(d.get("aprobado_asamblea"))
+    if fx:
+        aprobado = 1                      # como en el formulario: con fecha de asamblea, «Sí»
+    elif aprobado:
+        raise ErrorContable("Si los estados fueron aprobados por asamblea, indique la fecha de aprobación.")
+    if fx and cierre and fx < cierre:
+        raise ErrorContable("La fecha de aprobación por asamblea debe ser igual o posterior al cierre del ejercicio.")
+    if fa and fx and fa > fx:
+        raise ErrorContable("La fecha de autorización para la publicación no puede ser posterior a la de "
+                            "aprobación por asamblea.")
+    out["fecha_autorizacion"], out["fecha_asamblea"], out["aprobado_asamblea"] = fa, fx, aprobado
+    return out

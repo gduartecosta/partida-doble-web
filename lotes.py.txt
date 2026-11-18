@@ -1,0 +1,697 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Lotes de asientos, exportación de registraciones e importación desde planillas.
+
+- Un LOTE reúne asientos en espera: no forman parte de la contabilidad hasta que se registra el
+  lote completo. Al registrar se controla la cantidad de asientos y el total del Debe contra los
+  valores de control (como se hace con los lotes de comprobantes) y se registran todos o ninguno.
+- La PLANILLA de intercambio tiene una fila por movimiento. Se usa para importar asientos cargados
+  en Excel y también para exportar las registraciones de un período (respaldo o envío a otro local).
+- La importación es «todo o nada»: si hay errores se informan por número de fila y no se importa nada.
+"""
+import copy
+import csv
+import datetime as _dt
+import hashlib
+import json
+import os
+
+from .base import ErrorContable, Reporte, fmt_fecha, fmt_importe, parse_fecha, parse_importe, parse_tc
+from .terceros import _clave
+
+# (clave interna, título en la planilla, ancho)
+COLUMNAS = [
+    ("asiento", "Asiento", 9), ("fecha", "Fecha", 11), ("libro", "Libro", 7), ("local", "Local", 7),
+    ("concepto", "Concepto del asiento", 30), ("cuenta", "Cuenta", 9), ("detalle", "Detalle", 26),
+    ("debe", "Debe", 13), ("haber", "Haber", 13), ("moneda", "Moneda", 8), ("importe_me", "Importe ME", 12),
+    ("tipo_cambio", "Tipo de cambio", 11), ("cc", "Centro de costos", 10), ("tercero", "Cliente/Proveedor", 12),
+    ("vencimiento", "Vencimiento", 11), ("cancela", "Cancela asiento", 10),
+    ("tipo", "Tipo de asiento", 12),     # 7.6: vacío = normal; DIF_CAMBIO = ajuste por diferencia de cambio
+]
+TIPOS_ASIENTO = ("NORMAL", "APERTURA", "CIERRE", "DIF_CAMBIO")
+ALIAS = {
+    "asiento": ["asiento", "n asiento", "no asiento", "nro asiento", "numero", "numero de asiento", "id"],
+    "fecha": ["fecha"], "libro": ["libro", "codigo libro"], "local": ["local", "sucursal"],
+    "concepto": ["concepto del asiento", "concepto", "glosa"],
+    "cuenta": ["cuenta", "codigo cuenta", "codigo de cuenta", "cod cuenta"],
+    "detalle": ["detalle", "detalle del movimiento", "descripcion"],
+    "debe": ["debe"], "haber": ["haber"], "moneda": ["moneda"],
+    "importe_me": ["importe me", "importe moneda extranjera", "importe en moneda extranjera"],
+    "tipo_cambio": ["tipo de cambio", "tc", "cotizacion"],
+    "cc": ["centro de costos", "centro", "cc"],
+    "tercero": ["cliente/proveedor", "cliente proveedor", "tercero", "cliente", "proveedor"],
+    "vencimiento": ["vencimiento", "vence"], "cancela": ["cancela asiento", "cancela"],
+    "tipo": ["tipo de asiento"],
+}
+
+
+class ErrorImportacion(ErrorContable):
+    """Errores de una planilla: lista de (fila, asiento, mensaje)."""
+
+    def __init__(self, errores, mensaje=None):
+        self.errores = errores
+        super().__init__(mensaje or f"La planilla tiene {len(errores)} errores. No se importó nada.")
+
+
+class ErrorDuplicado(ErrorContable):
+    """El mismo archivo ya fue importado en esta empresa."""
+
+
+def _texto(v):
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return str(v).strip()
+
+
+def _importe(v):
+    if v is None or v == "":
+        return 0
+    if isinstance(v, (int, float)):
+        if v < 0:
+            raise ErrorContable("los importes van en positivo; el lado (Debe o Haber) indica el signo")
+        return int(round(v * 100))
+    return parse_importe(v)
+
+
+def _fecha_celda(v):
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        return (v.date() if isinstance(v, _dt.datetime) else v).isoformat()
+    return parse_fecha(_texto(v))
+
+
+def leer_planilla(ruta):
+    """Lee la hoja de asientos de un .xlsx o un .csv. Devuelve (filas, hojas_extra).
+    filas: [(n° de fila, {clave: valor})]; hojas_extra: {nombre: [dict]} (Terceros, Centros de costos, Datos)."""
+    extra = {}
+    if ruta.lower().endswith((".xlsx", ".xlsm")):
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            raise ErrorContable("Para leer planillas Excel falta la librería openpyxl (ejecute instalar.bat).")
+        wb = load_workbook(ruta, read_only=True, data_only=True)
+        hoja = wb["Asientos"] if "Asientos" in wb.sheetnames else wb.worksheets[0]
+        crudas = [list(r) for r in hoja.iter_rows(values_only=True)]
+        for nombre in ("Terceros", "Centros de costos", "Datos"):
+            if nombre in wb.sheetnames:
+                filas = [list(r) for r in wb[nombre].iter_rows(values_only=True)]
+                if filas:
+                    cab = [_clave(_texto(c)) for c in filas[0]]
+                    extra[nombre] = [dict(zip(cab, r)) for r in filas[1:] if any(x not in (None, "") for x in r)]
+    else:
+        with open(ruta, encoding="utf-8-sig", newline="") as f:
+            muestra = f.read(4096)
+            f.seek(0)
+            sep = ";" if muestra.count(";") >= muestra.count(",") else ","
+            if "\t" in muestra and muestra.count("\t") > muestra.count(sep):
+                sep = "\t"
+            crudas = [r for r in csv.reader(f, delimiter=sep)]
+    # se busca la fila de títulos: la primera que tenga «Cuenta» y «Debe» o «Haber»
+    mapa_alias = {a: k for k, lista in ALIAS.items() for a in lista}
+    for i, fila in enumerate(crudas):
+        claves = [mapa_alias.get(_clave(_texto(c))) for c in fila]
+        if "cuenta" in claves and ("debe" in claves or "haber" in claves):
+            titulos, inicio = claves, i + 1
+            break
+    else:
+        raise ErrorContable("No se encontró la fila de títulos. La planilla debe tener al menos las columnas "
+                            "«Cuenta», «Debe» y «Haber» (descargue la planilla modelo).")
+    filas = []
+    for n, fila in enumerate(crudas[inicio:], inicio + 1):
+        datos = {k: v for k, v in zip(titulos, fila) if k}
+        if any(_texto(v) for v in datos.values()):
+            filas.append((n, datos))
+    return filas, extra
+
+
+class LotesMixin:
+    """Lotes, exportación e importación (se integran a Contabilidad)."""
+
+    # ------------------------------------------------------------------ lotes
+    def lotes(self, emp, estado=None):
+        sql = ("SELECT l.*, (SELECT COUNT(*) FROM lote_asientos a WHERE a.lote_id=l.id) AS cantidad "
+               "FROM lotes l WHERE empresa_id=?")
+        par = [emp]
+        if estado:
+            sql += " AND estado=?"
+            par.append(estado)
+        return self.con.execute(sql + " ORDER BY estado, creado DESC", par).fetchall()
+
+    def lote(self, lote_id):
+        l = self.con.execute("SELECT * FROM lotes WHERE id=?", (lote_id,)).fetchone()
+        if not l:
+            raise ErrorContable("El lote no existe.")
+        return l
+
+    def crear_lote(self, emp, nombre, control_cantidad=None, control_total=None, origen="carga manual"):
+        nombre = (nombre or "").strip()
+        if not nombre:
+            raise ErrorContable("Indique un nombre para el lote (por ejemplo «Ventas marzo»).")
+        if isinstance(control_total, str):
+            control_total = parse_importe(control_total) if control_total.strip() else None
+        if isinstance(control_cantidad, str):
+            control_cantidad = int(control_cantidad) if control_cantidad.strip() else None
+        with self.con:
+            return self.con.execute(
+                "INSERT INTO lotes(empresa_id,nombre,origen,creado,control_cantidad,control_total) VALUES (?,?,?,?,?,?)",
+                (emp, nombre, origen, _dt.datetime.now().isoformat(timespec="seconds"), control_cantidad,
+                 control_total)).lastrowid
+
+    def modificar_lote(self, lote_id, nombre, control_cantidad=None, control_total=None):
+        self._lote_abierto(lote_id)
+        if isinstance(control_total, str):
+            control_total = parse_importe(control_total) if control_total.strip() else None
+        if isinstance(control_cantidad, str):
+            control_cantidad = int(control_cantidad) if control_cantidad.strip() else None
+        with self.con:
+            self.con.execute("UPDATE lotes SET nombre=?, control_cantidad=?, control_total=? WHERE id=?",
+                             (nombre.strip(), control_cantidad, control_total, lote_id))
+
+    def _lote_abierto(self, lote_id):
+        l = self.lote(lote_id)
+        if l["estado"] != "ABIERTO":
+            raise ErrorContable(f"El lote «{l['nombre']}» ya fue registrado (asientos {l['numeros']}); no se puede modificar.")
+        return l
+
+    def eliminar_lote(self, lote_id):
+        self._lote_abierto(lote_id)
+        with self.con:
+            self.con.execute("DELETE FROM lote_asientos WHERE lote_id=?", (lote_id,))
+            self.con.execute("DELETE FROM lotes WHERE id=?", (lote_id,))
+
+    def asientos_lote(self, lote_id):
+        out = []
+        for a in self.con.execute("SELECT * FROM lote_asientos WHERE lote_id=? ORDER BY fecha, orden",
+                                  (lote_id,)).fetchall():
+            d = dict(a)
+            d["lineas"] = json.loads(a["lineas"])
+            d["total"] = sum(int(x.get("debe") or 0) for x in d["lineas"])
+            out.append(d)
+        return out
+
+    def asiento_lote(self, la_id):
+        a = self.con.execute("SELECT * FROM lote_asientos WHERE id=?", (la_id,)).fetchone()
+        if not a:
+            raise ErrorContable("El asiento del lote no existe.")
+        d = dict(a)
+        d["lineas"] = json.loads(a["lineas"])
+        return d
+
+    def guardar_asiento_lote(self, lote_id, fecha, libro_id, local_id, concepto, lineas, la_id=None, ref_externa=None,
+                             tipo=None):
+        """Valida el asiento con las mismas reglas que uno normal y lo guarda en el lote (sin registrarlo).
+        tipo: NORMAL o DIF_CAMBIO...; si no se indica, al modificar se conserva el que tenía."""
+        l = self._lote_abierto(lote_id)
+        if tipo is None:
+            r = self.con.execute("SELECT tipo FROM lote_asientos WHERE id=?", (la_id,)).fetchone() if la_id else None
+            tipo = (r[0] if r else None) or "NORMAL"
+        prueba = copy.deepcopy(lineas)
+        fecha = self.preparar_asiento(l["empresa_id"], fecha, libro_id, local_id, prueba, tipo)
+        datos = json.dumps(prueba, ensure_ascii=False)
+        with self.con:
+            if la_id:
+                self.con.execute("UPDATE lote_asientos SET fecha=?, libro_id=?, local_id=?, concepto=?, lineas=?, tipo=? "
+                                 "WHERE id=? AND lote_id=?", (fecha, libro_id, local_id, concepto or "", datos,
+                                                             tipo, la_id, lote_id))
+                return la_id
+            orden = self.con.execute("SELECT COALESCE(MAX(orden),0)+1 FROM lote_asientos WHERE lote_id=?",
+                                     (lote_id,)).fetchone()[0]
+            return self.con.execute(
+                "INSERT INTO lote_asientos(lote_id,orden,fecha,libro_id,local_id,concepto,lineas,ref_externa,tipo) "
+                "VALUES (?,?,?,?,?,?,?,?,?)", (lote_id, orden, fecha, libro_id, local_id, concepto or "", datos,
+                                               ref_externa, tipo)).lastrowid
+
+    def eliminar_asiento_lote(self, la_id):
+        a = self.asiento_lote(la_id)
+        self._lote_abierto(a["lote_id"])
+        usados = [x for x in self.asientos_lote(a["lote_id"])
+                  if any(m.get("ref_lote") == la_id for m in x["lineas"])]
+        if usados:
+            raise ErrorContable("No se puede quitar: otro asiento del lote cancela una operación de este.")
+        with self.con:
+            self.con.execute("DELETE FROM lote_asientos WHERE id=?", (la_id,))
+
+    def control_lote(self, lote_id):
+        """Devuelve (cantidad, total_debe, mensajes_de_control, ok)."""
+        l = self.lote(lote_id)
+        asientos = self.asientos_lote(lote_id)
+        cant, total = len(asientos), sum(a["total"] for a in asientos)
+        msgs, ok = [], True
+        if l["control_cantidad"] is not None:
+            if cant == l["control_cantidad"]:
+                msgs.append(f"Cantidad de asientos: {cant}, coincide con el control.")
+            else:
+                ok = False
+                msgs.append(f"Cantidad de asientos: {cant}; el control indica {l['control_cantidad']}.")
+        if l["control_total"] is not None:
+            if total == l["control_total"]:
+                msgs.append(f"Total del Debe: $ {fmt_importe(total)}, coincide con el control.")
+            else:
+                ok = False
+                msgs.append(f"Total del Debe: $ {fmt_importe(total)}; el control indica $ {fmt_importe(l['control_total'])}"
+                            f" (diferencia $ {fmt_importe(total - l['control_total'])}).")
+        if not asientos:
+            ok = False
+            msgs.append("El lote no tiene asientos.")
+        return cant, total, msgs, ok
+
+    def registrar_lote(self, lote_id):
+        """Registra todos los asientos del lote en la contabilidad, o ninguno si alguno falla."""
+        l = self._lote_abierto(lote_id)
+        emp = l["empresa_id"]
+        _, _, msgs, ok = self.control_lote(lote_id)
+        if not ok:
+            raise ErrorContable("El lote no pasa el control:\n" + "\n".join(msgs))
+        asientos = self.asientos_lote(lote_id)
+        posicion = {a["id"]: i for i, a in enumerate(asientos)}
+        # 1) validación completa antes de tocar la contabilidad
+        for i, a in enumerate(asientos):
+            for m in a["lineas"]:
+                if m.get("ref_lote") and posicion.get(m["ref_lote"], i) >= i:
+                    raise ErrorContable(f"El asiento del {fmt_fecha(a['fecha'])} «{a['concepto']}» cancela una "
+                                        "operación que en el lote tiene fecha posterior o no está en el lote.")
+            try:
+                self.preparar_asiento(emp, a["fecha"], a["libro_id"], a["local_id"], copy.deepcopy(a["lineas"]),
+                                      a.get("tipo") or "NORMAL")
+            except ErrorContable as e:
+                raise ErrorContable(f"Asiento del {fmt_fecha(a['fecha'])} «{a['concepto']}»: {e}")
+        # 2) registro; si algo falla, se deshace lo registrado
+        creados, nuevos = {}, []
+        try:
+            for a in asientos:
+                lineas = copy.deepcopy(a["lineas"])
+                for m in lineas:
+                    if m.get("ref_lote"):
+                        m["ref_asiento_id"] = creados[m.pop("ref_lote")]
+                    m.pop("ref_lote", None)
+                aid = self.guardar_asiento(emp, a["fecha"], a["libro_id"], a["local_id"], a["concepto"], lineas,
+                                           tipo=a.get("tipo") or "NORMAL")
+                creados[a["id"]] = aid
+                nuevos.append(aid)
+        except Exception:
+            with self.con:
+                for aid in reversed(nuevos):
+                    self.con.execute("DELETE FROM asientos WHERE id=?", (aid,))
+            raise
+        nums = [self.asiento(x)["numero"] for x in nuevos]
+        texto = f"{min(nums)} a {max(nums)}" if len(nums) > 1 else str(nums[0])
+        with self.con:
+            self.con.execute("UPDATE lotes SET estado='REGISTRADO', registrado=?, numeros=? WHERE id=?",
+                             (_dt.datetime.now().isoformat(timespec="seconds"), texto, lote_id))
+        return nuevos
+
+    # ------------------------------------------------------------ exportación
+    def _filas_exportacion(self, emp, desde, hasta, local_id=None, libro_id=None):
+        sql = ("SELECT a.*, l.codigo AS libro_cod, lo.codigo AS local_cod FROM asientos a "
+               "JOIN libros l ON l.id=a.libro_id JOIN locales lo ON lo.id=a.local_id "
+               "WHERE a.empresa_id=? AND a.fecha BETWEEN ? AND ?")
+        par = [emp, desde, hasta]
+        if local_id:
+            sql += " AND a.local_id=?"
+            par.append(local_id)
+        if libro_id:
+            sql += " AND a.libro_id=?"
+            par.append(libro_id)
+        filas, terceros, centros = [], set(), set()
+        cod_loc = {x["id"]: x["codigo"] for x in self.locales(emp)}
+        for a in self.con.execute(sql + " ORDER BY a.fecha, a.numero", par).fetchall():
+            for k, m in enumerate(self.movimientos_de(a["id"])):
+                if m["tercero_id"]:
+                    terceros.add(m["tercero_id"])
+                if m["cc_id"]:
+                    centros.add(m["cc_id"])
+                loc_linea = cod_loc.get(m["local_id"]) if m["local_id"] and m["local_id"] != a["local_id"] else ""
+                filas.append({
+                    "asiento": a["numero"], "fecha": _dt.date.fromisoformat(a["fecha"]),
+                    "libro": a["libro_cod"], "local": a["local_cod"] if k == 0 or not loc_linea else loc_linea,
+                    "concepto": a["concepto"] if k == 0 else "", "cuenta": m["codigo"], "detalle": m["concepto"],
+                    "debe": m["debe"] / 100 if m["debe"] else None, "haber": m["haber"] / 100 if m["haber"] else None,
+                    "moneda": m["moneda"] or "", "importe_me": m["importe_me"] / 100 if m["importe_me"] else None,
+                    "tipo_cambio": m["tipo_cambio"] if m["importe_me"] else None, "cc": m["cc_cod"] or "",
+                    "tercero": m["ter_cod"] or "",
+                    "vencimiento": _dt.date.fromisoformat(m["vencimiento"]) if m["vencimiento"] else None,
+                    "cancela": m["ref_numero"] or "",
+                    "tipo": a["tipo"] if k == 0 and a["tipo"] != "NORMAL" else ""})
+        return filas, terceros, centros
+
+    def exportar_registraciones(self, emp, desde, hasta, ruta, local_id=None, libro_id=None):
+        """Planilla con los asientos del período, en el formato de importación. Devuelve (asientos, total)."""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+        except ImportError:
+            raise ErrorContable("Para exportar a Excel falta la librería openpyxl (ejecute instalar.bat).")
+        desde, hasta = parse_fecha(desde), parse_fecha(hasta)
+        filas, terceros, centros = self._filas_exportacion(emp, desde, hasta, local_id, libro_id)
+        if not filas:
+            raise ErrorContable("No hay asientos en ese período.")
+        e = self.empresa(emp)
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Asientos"
+        self._hoja_asientos(ws, filas, Font, PatternFill)
+        wt = wb.create_sheet("Terceros")
+        cols_t = ["codigo", "nombre", "tipo", "doc_tipo", "documento", "actividad", "area", "localidad", "plazo_dias"]
+        wt.append(["Código", "Nombre", "Tipo", "Doc_tipo", "Documento", "Actividad", "Área", "Localidad", "Plazo_dias"])
+        for tid in sorted(terceros):
+            t = self.tercero(tid)
+            wt.append([t[c] for c in cols_t])
+        wc = wb.create_sheet("Centros de costos")
+        wc.append(["Código", "Nombre"])
+        for cc in sorted(centros):
+            r = self.con.execute("SELECT codigo, nombre FROM centros_costo WHERE id=?", (cc,)).fetchone()
+            wc.append([r[0], r[1]])
+        n = len({f["asiento"] for f in filas})
+        total = round(sum(f["debe"] or 0 for f in filas) * 100)
+        wd = wb.create_sheet("Datos")
+        for fila in (("Empresa", f"{e['codigo']} {e['nombre']}"), ("Desde", fmt_fecha(desde)), ("Hasta", fmt_fecha(hasta)),
+                     ("Cantidad de asientos", n), ("Total Debe", total / 100),
+                     ("Exportado", _dt.datetime.now().strftime("%d/%m/%Y %H:%M")),
+                     ("Programa", "Partida Doble — sistema contable didáctico")):
+            wd.append(list(fila))
+        wd.column_dimensions["A"].width = 22
+        wd.column_dimensions["B"].width = 40
+        wb.save(ruta)
+        return n, total
+
+    @staticmethod
+    def _hoja_asientos(ws, filas, Font, PatternFill):
+        ws.append([t for _, t, _ in COLUMNAS])
+        for c in ws[1]:
+            c.font = Font(bold=True)
+            c.fill = PatternFill("solid", fgColor="DDE3EA")
+        for f in filas:
+            ws.append([f.get(k) for k, _, _ in COLUMNAS])
+        from openpyxl.utils import get_column_letter
+        for j, (k, _, ancho) in enumerate(COLUMNAS, 1):
+            ws.column_dimensions[get_column_letter(j)].width = ancho + 2
+            for celda in ws.iter_cols(min_col=j, max_col=j, min_row=2):
+                for c in celda:
+                    if k in ("fecha", "vencimiento"):
+                        c.number_format = "DD/MM/YYYY"
+                    elif k in ("debe", "haber", "importe_me"):
+                        c.number_format = "#,##0.00"
+        ws.freeze_panes = "A2"
+
+    def plantilla_importacion(self, emp, ruta):
+        """Planilla modelo con instrucciones, un ejemplo y las listas de códigos de la empresa."""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+        except ImportError:
+            raise ErrorContable("Para crear la planilla falta la librería openpyxl (ejecute instalar.bat).")
+        wb = Workbook()
+        wi = wb.active
+        wi.title = "Instrucciones"
+        texto = [
+            "PLANILLA PARA IMPORTAR ASIENTOS — Partida Doble",
+            "",
+            "1. Complete la hoja «Asientos»: una fila por cada movimiento (cada cuenta que se debita o acredita).",
+            "2. Todas las filas de un mismo asiento llevan el mismo valor en «Asiento» (1, 2, 3... o A, B, C).",
+            "   Si la celda «Asiento» queda vacía, la fila pertenece al asiento de la fila anterior.",
+            "3. Fecha, Libro, Local y Concepto se toman de la primera fila de cada asiento.",
+            "4. «Cuenta» es el código del plan de cuentas (hoja «Cuentas»). Solo cuentas con movimiento.",
+            "5. «Debe» y «Haber» van en la moneda funcional de la empresa (pesos, salvo que la ficha diga otra),",
+            "   en positivo, uno de los dos por fila. Cada asiento debe balancear.",
+            "6. Opcionales: Moneda, Importe ME y Tipo de cambio (operaciones en moneda extranjera); Centro de",
+            "   costos; Cliente/Proveedor (obligatorio en cuentas con auxiliar); Vencimiento; «Cancela asiento»:",
+            "   el valor de «Asiento» de la operación que se cancela, si está en la misma planilla.",
+            "7. Las fechas se escriben dd/mm/aaaa. Los importes, con coma decimal (1.234,56) o como números.",
+            "8. Si hay errores, el programa los informa por número de fila y no importa nada.",
+            "9. Lo importado queda en un LOTE: revíselo y regístrelo desde «Ingreso de asientos → Lotes».",
+            "10. «Tipo de asiento» (opcional, primera fila del asiento): vacío para un asiento común; DIF_CAMBIO para",
+            "    un ajuste por diferencia de cambio, cuyas líneas en moneda extranjera van sin importe ni tipo de cambio.",
+        ]
+        for t in texto:
+            wi.append([t])
+        wi["A1"].font = Font(bold=True, size=13)
+        wi.column_dimensions["A"].width = 110
+        ws = wb.create_sheet("Asientos")
+        ej = []
+        libro = (self.libros(emp) or [None])[0]
+        loc = self.locales(emp)[0]
+        hoy = _dt.date.today().replace(day=1)
+        def cta(c):
+            x = self.cuenta_por_codigo(emp, c)
+            return c if x and x["imputable"] else ""
+        if cta("1111") and cta("4111") and cta("2144"):
+            base = dict(fecha=hoy, libro=libro["codigo"] if libro else "", local=loc["codigo"])
+            ej = [dict(base, asiento=1, concepto="Venta contado fact. A-0001", cuenta="1111", debe=1220),
+                  dict(asiento=1, cuenta="4111", haber=1000), dict(asiento=1, cuenta="2144", haber=220),
+                  dict(base, asiento=2, concepto="Pago de luz", cuenta="5231", debe=850, detalle="UTE"),
+                  dict(asiento=2, cuenta="1111", haber=850)]
+        self._hoja_asientos(ws, ej, Font, PatternFill)
+        wb.move_sheet("Asientos", offset=-1)
+        listas = [
+            ("Cuentas", ["Código", "Nombre", "Con movimiento", "Auxiliar", "Moneda"],
+             [(c["codigo"], c["nombre"], "Sí" if c["imputable"] else "", c["auxiliar"] or "", c["moneda"] or "")
+              for c in self.cuentas(emp)]),
+            ("Libros", ["Código", "Nombre"], [(x["codigo"], x["nombre"]) for x in self.libros(emp)]),
+            ("Locales", ["Código", "Nombre"], [(x["codigo"], x["nombre"]) for x in self.locales(emp)]),
+            ("Centros de costos", ["Código", "Nombre"], [(x["codigo"], x["nombre"]) for x in self.centros_costo(emp)]),
+            ("Terceros", ["Código", "Nombre", "Tipo"], [(x["codigo"], x["nombre"], x["tipo"]) for x in self.terceros(emp)]),
+        ]
+        for nombre, cab, filas in listas:
+            w = wb.create_sheet(nombre)
+            w.append(cab)
+            for c in w[1]:
+                c.font = Font(bold=True)
+            for f in filas:
+                w.append(list(f))
+            w.column_dimensions["A"].width = 12
+            w.column_dimensions["B"].width = 40
+        wb.save(ruta)
+
+    # ------------------------------------------------------------- importación
+    def importar_planilla(self, emp, ruta, nombre_lote=None, local_destino=None, crear_faltantes=True,
+                          permitir_duplicado=False):
+        """Importa una planilla en un lote nuevo. Devuelve (lote_id, cantidad_asientos, advertencias).
+        local_destino: código de local que reemplaza al de la planilla (para recibir asientos de otro local)."""
+        filas, extra = leer_planilla(ruta)
+        if not filas:
+            raise ErrorContable("La planilla no tiene movimientos.")
+        huella = hashlib.sha256(json.dumps([[f[0], {k: _texto(v) for k, v in sorted(f[1].items())}] for f in filas],
+                                           ensure_ascii=False).encode()).hexdigest()
+        previa = self.con.execute("SELECT i.fecha, l.nombre FROM importaciones i LEFT JOIN lotes l ON l.id=i.lote_id "
+                                  "WHERE i.empresa_id=? AND i.huella=?", (emp, huella)).fetchone()
+        if previa and not permitir_duplicado:
+            raise ErrorDuplicado(f"Este archivo ya se importó el {previa[0][:10]}"
+                                 + (f" (lote «{previa[1]}»)" if previa[1] else "")
+                                 + ". Importarlo otra vez duplicaría los asientos.")
+        cuentas = {c["codigo"]: c for c in self.cuentas(emp)}
+        libros = {x["codigo"].upper(): x["id"] for x in self.libros(emp)}
+        libros_nombre = {_clave(x["nombre"]): x["id"] for x in self.libros(emp)}
+        locales = {x["codigo"].upper(): x["id"] for x in self.locales(emp)}
+        centros = {x["codigo"].upper(): x["id"] for x in self.centros_costo(emp)}
+        terceros = {x["codigo"].upper(): x["id"] for x in self.terceros(emp)}
+        monedas = {x["codigo"] for x in self.monedas()}
+        funcional = self.empresa(emp)["moneda_nacional"]
+        loc_forzado = None
+        if local_destino:
+            loc_forzado = locales.get(str(local_destino).strip().upper())
+            if not loc_forzado:
+                raise ErrorContable(f"El local de destino «{local_destino}» no existe en esta empresa.")
+        errores, advertencias = [], []
+
+        # agrupar filas por asiento (celda vacía = continúa el asiento anterior)
+        grupos, actual = [], None
+        for n, d in filas:
+            clave = _texto(d.get("asiento"))
+            if clave and (actual is None or clave != actual["clave"]):
+                if any(g["clave"] == clave for g in grupos):
+                    errores.append((n, clave, f"El asiento «{clave}» aparece en filas no consecutivas."))
+                actual = {"clave": clave, "filas": []}
+                grupos.append(actual)
+            elif actual is None:
+                actual = {"clave": "1", "filas": []}
+                grupos.append(actual)
+            actual["filas"].append((n, d))
+
+        # clientes, proveedores y centros que faltan
+        info_ter = {_texto(t.get("codigo")).upper(): t for t in extra.get("Terceros", [])}
+        info_cc = {_texto(t.get("codigo")).upper(): t for t in extra.get("Centros de costos", [])}
+        falt_ter, falt_cc = {}, set()
+        for g in grupos:
+            for n, d in g["filas"]:
+                t, cc = _texto(d.get("tercero")).upper(), _texto(d.get("cc")).upper()
+                if t and t not in terceros:
+                    c = cuentas.get(_texto(d.get("cuenta")))
+                    falt_ter.setdefault(t, set()).add((c["auxiliar"] if c else None) or "C")
+                if cc and cc not in centros:
+                    falt_cc.add(cc)
+        creados_ter, creados_cc = [], []
+        if crear_faltantes:
+            for cod, tipos in falt_ter.items():
+                info = info_ter.get(cod, {})
+                tipo = _texto(info.get("tipo")) or ("A" if len(tipos) > 1 else next(iter(tipos)))
+                try:
+                    tid = self.guardar_tercero(emp, dict(codigo=cod, nombre=_texto(info.get("nombre")) or cod, tipo=tipo,
+                                                         doc_tipo=_texto(info.get("doc_tipo")) or "RUT",
+                                                         documento=_texto(info.get("documento")),
+                                                         actividad=_texto(info.get("actividad")),
+                                                         area=_texto(info.get("area")),
+                                                         localidad=_texto(info.get("localidad")),
+                                                         plazo_dias=_texto(info.get("plazo_dias")) or 0),
+                                               forzar_documento=True)
+                except ErrorContable:
+                    tid = self.guardar_tercero(emp, dict(codigo=cod, nombre=_texto(info.get("nombre")) or cod, tipo=tipo))
+                terceros[cod] = tid
+                creados_ter.append(tid)
+                advertencias.append(f"Se creó el {'cliente' if tipo == 'C' else 'proveedor' if tipo == 'P' else 'cliente y proveedor'} "
+                                    f"{cod} {_texto(info.get('nombre')) or '(complete sus datos)'}.")
+            for cod in sorted(falt_cc):
+                nombre = _texto(info_cc.get(cod, {}).get("nombre")) or cod
+                centros[cod] = self.guardar_centro_costo(emp, cod, nombre)
+                creados_cc.append(centros[cod])
+                advertencias.append(f"Se creó el centro de costos {cod} {nombre}.")
+
+        # armado y validación de cada asiento
+        preparados, claves = [], {g["clave"] for g in grupos}
+        for g in grupos:
+            n0, d0 = g["filas"][0]
+            try:
+                fecha = _fecha_celda(d0.get("fecha"))
+            except ErrorContable as e:
+                errores.append((n0, g["clave"], f"Fecha: {e}"))
+                continue
+            lib_txt = _texto(d0.get("libro"))
+            libro = libros.get(lib_txt.upper()) or libros_nombre.get(_clave(lib_txt)) if lib_txt else \
+                next((x["id"] for x in self.libros(emp) if x["tipo"] == "DIARIO"), None)
+            if not libro:
+                errores.append((n0, g["clave"], f"El libro «{lib_txt}» no existe."))
+                continue
+            loc_txt = _texto(d0.get("local")).upper()
+            local = loc_forzado or (locales.get(loc_txt) if loc_txt else self.locales(emp)[0]["id"])
+            if not local:
+                errores.append((n0, g["clave"], f"El local «{loc_txt}» no existe (puede indicar un local de destino)."))
+                continue
+            tipo = _texto(d0.get("tipo")).upper().replace(" ", "_") or "NORMAL"
+            if tipo not in TIPOS_ASIENTO:
+                errores.append((n0, g["clave"], f"Tipo de asiento «{tipo}» desconocido (vacío, {', '.join(TIPOS_ASIENTO[1:])})."))
+                continue
+            lineas, ok = [], True
+            for n, d in g["filas"]:
+                try:
+                    lineas.append(self._linea_planilla(d, cuentas, centros, terceros, monedas, locales, loc_forzado,
+                                                       claves, g["clave"], advertencias, n, funcional, tipo))
+                except ErrorContable as e:
+                    errores.append((n, g["clave"], str(e)))
+                    ok = False
+            if not ok:
+                continue
+            try:
+                prueba = copy.deepcopy(lineas)
+                self.preparar_asiento(emp, fecha, libro, local, prueba, tipo)
+            except ErrorContable as e:
+                errores.append((n0, g["clave"], str(e)))
+                continue
+            conceptos = [_texto(d.get("concepto")) for _, d in g["filas"] if _texto(d.get("concepto"))]
+            preparados.append(dict(clave=g["clave"], fecha=fecha, libro=libro, local=local,
+                                   concepto=conceptos[0] if conceptos else "", lineas=lineas, tipo=tipo))
+
+        if errores:
+            with self.con:   # todo o nada: se deshacen las altas automáticas
+                for tid in creados_ter:
+                    self.con.execute("DELETE FROM terceros WHERE id=?", (tid,))
+                for cc in creados_cc:
+                    self.con.execute("DELETE FROM centros_costo WHERE id=?", (cc,))
+            raise ErrorImportacion(sorted(errores))
+
+        datos = "Datos" in extra
+        origen = f"importado de {os.path.basename(ruta)}"
+        nombre = nombre_lote or os.path.splitext(os.path.basename(ruta))[0]
+        total = sum(int(m.get("debe") or 0) for p in preparados for m in p["lineas"])
+        lote_id = self.crear_lote(emp, nombre, len(preparados), total, origen)
+        ids = {}
+        for p in sorted(preparados, key=lambda p: p["fecha"]):
+            for m in p["lineas"]:
+                if m.get("ref_clave"):
+                    m["ref_lote"] = ids.get(m.pop("ref_clave"))
+            ids[p["clave"]] = self.guardar_asiento_lote(lote_id, p["fecha"], p["libro"], p["local"], p["concepto"],
+                                                        p["lineas"], ref_externa=p["clave"], tipo=p["tipo"])
+        with self.con:
+            self.con.execute("INSERT INTO importaciones(empresa_id,huella,archivo,fecha,lote_id) VALUES (?,?,?,?,?)",
+                             (emp, huella, os.path.basename(ruta), _dt.datetime.now().isoformat(timespec="seconds"),
+                              lote_id))
+        if datos:
+            advertencias.insert(0, "Planilla exportada por Partida Doble.")
+        return lote_id, len(preparados), advertencias
+
+    def _linea_planilla(self, d, cuentas, centros, terceros, monedas, locales, loc_forzado, claves, clave_asiento,
+                        advertencias, n, funcional="UYU", tipo="NORMAL"):
+        cod = _texto(d.get("cuenta"))
+        c = cuentas.get(cod)
+        if not c:
+            raise ErrorContable(f"La cuenta «{cod}» no existe en el plan de cuentas." if cod else "Falta la cuenta.")
+        if not c["imputable"]:
+            raise ErrorContable(f"{cod} {c['nombre']} es un rubro agrupador; use una cuenta con movimiento.")
+        try:
+            debe, haber = _importe(d.get("debe")), _importe(d.get("haber"))
+        except ErrorContable as e:
+            raise ErrorContable(f"Importe: {e}")
+        linea = dict(cuenta_id=c["id"], concepto=_texto(d.get("detalle")), debe=debe, haber=haber)
+        mon = _texto(d.get("moneda")).upper()
+        if mon and mon != funcional:
+            if mon not in monedas:
+                raise ErrorContable(f"La moneda «{mon}» no existe.")
+            sin_me = not _texto(d.get("importe_me")) and not _texto(d.get("tipo_cambio"))
+            if tipo == "DIF_CAMBIO" and sin_me:      # ajuste por diferencia de cambio: solo mueve la moneda funcional
+                linea["moneda"] = mon
+                mon = None
+        if mon and mon != funcional:
+            try:
+                linea.update(moneda=mon, importe_me=_importe(d.get("importe_me")),
+                             tipo_cambio=float(d["tipo_cambio"]) if isinstance(d.get("tipo_cambio"), (int, float))
+                             else parse_tc(_texto(d.get("tipo_cambio"))))
+            except (ErrorContable, KeyError) as e:
+                raise ErrorContable(f"Moneda extranjera: {e}")
+        cc = _texto(d.get("cc")).upper()
+        if cc:
+            if cc not in centros:
+                raise ErrorContable(f"El centro de costos «{cc}» no existe.")
+            linea["cc_id"] = centros[cc]
+        else:
+            linea["cc_id"] = None
+        loc = _texto(d.get("local")).upper()
+        linea["local_id"] = None
+        if loc and not loc_forzado and loc in locales:
+            linea["local_id"] = locales[loc]
+        ter = _texto(d.get("tercero")).upper()
+        if ter:
+            if ter not in terceros:
+                raise ErrorContable(f"El cliente o proveedor «{ter}» no existe.")
+            linea["tercero_id"] = terceros[ter]
+        if _texto(d.get("vencimiento")):
+            try:
+                linea["vencimiento"] = _fecha_celda(d.get("vencimiento"))
+            except ErrorContable as e:
+                raise ErrorContable(f"Vencimiento: {e}")
+        ref = _texto(d.get("cancela"))
+        if ref:
+            if ref in claves and ref != clave_asiento:
+                linea["ref_clave"] = ref
+            else:
+                advertencias.append(f"Fila {n}: «Cancela asiento {ref}» no está en la planilla; el cobro o pago se "
+                                    "aplicará a las operaciones más antiguas.")
+        return linea
+
+    def informe_errores(self, emp, errores, archivo):
+        rep = Reporte("Errores de importación", self._subtitulo(emp, f"Archivo: {archivo} · No se importó nada"),
+                      [("Fila", "texto", 6), ("Asiento", "texto", 8), ("Error", "texto", 80)])
+        for n, clave, msg in errores:
+            rep.agregar([str(n), clave, msg], "alerta")
+        rep.notas.append("Corrija la planilla y vuelva a importarla. «Fila» es el número de fila de Excel.")
+        return rep

@@ -1,0 +1,614 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+# Licencia Pública General GNU (GPL), versión 3 o posterior (ver LICENSE).
+"""Informes de análisis (7.6, pedido del 18/11/2026).
+
+1. Estado de resultados en formato EBITDA. Decisiones del director:
+   - dos EBITDA: el reportado (resultado operativo + depreciaciones y amortizaciones, con otros ingresos y otros
+     gastos) y el ajustado (sin otros ingresos ni otros gastos, que se muestran como partidas no recurrentes);
+   - las depreciaciones y amortizaciones se detectan por el nombre de la cuenta y se pueden cambiar
+     (Tablero › Rubros…).
+2. Indicadores a partir del EBITDA: los que combinan un saldo con un resultado usan el EBITDA de los últimos
+   12 meses y la deuda financiera neta de efectivo y equivalentes.
+3. Estado de evolución del patrimonio: columnas por rubro de patrimonio; movimientos clasificados por la cuenta
+   de contrapartida; ejercicio actual y anterior.
+"""
+import datetime as _dt
+
+from .base import SECCIONES_ER, SECCIONES_GASTO, ErrorContable, Reporte, fmt_fecha, fmt_importe, parse_fecha
+from .tablero import INDICADORES, _hace_un_anio, fmt_indicador, texto_rango
+
+NOMBRES_SECCION = {"ING": "Ingresos de actividades ordinarias", "CV": "Costo de ventas",
+                   "GD": "Gastos de distribución y ventas", "GA": "Gastos de administración",
+                   "OI": "Otros ingresos", "OG": "Otros gastos", "IF": "Ingresos financieros",
+                   "CF": "Costos financieros", "IR": "Impuesto a la renta"}
+FILAS_PATRIMONIO = [
+    ("apertura", "Saldos iniciales registrados con el asiento de apertura"),
+    ("aportes", "Aportes de los propietarios"),
+    ("reduccion", "Reducción o reintegro de capital"),
+    ("capitalizacion", "Capitalización de reservas o resultados"),
+    ("reservas", "Constitución de reservas"),
+    ("distribucion", "Distribución de utilidades"),
+    ("ajustes_ant", "Ajustes de resultados de ejercicios anteriores"),
+    ("revaluacion", "Revaluación y otros ajustes al patrimonio"),
+    ("otros", "Otros movimientos entre rubros"),
+    ("resultado", "Resultado del ejercicio"),
+]
+
+
+def _pct(a, b):
+    return f"{a / b * 100:.1f} %".replace(".", ",") if b else ""
+
+
+def _var(a, b):
+    if not b:
+        return ""
+    return f"{(a - b) / abs(b) * 100:+.1f} %".replace(".", ",")
+
+
+class AnalisisMixin:
+    # ------------------------------------------------------------------ EBITDA
+    def _er_detalle(self, emp, desde, hasta, local_id=None, cc_id=None):
+        """Importes naturales por sección, con las depreciaciones y amortizaciones y lo no recurrente aparte."""
+        mapa = self.mapa_cuentas(emp)
+        dya = self.rubros_ebitda(emp)["dya"]
+        sec = dict.fromkeys(NOMBRES_SECCION, 0)
+        dya_cuentas, no_rec = {}, {}
+        for cid, (d, h) in self.sumas(emp, desde, hasta, local_id, cc_id).items():
+            c = mapa[cid]
+            s = c["seccion_ef"]
+            if s not in SECCIONES_ER:
+                continue
+            nat = (d - h) if s in SECCIONES_GASTO else (h - d)
+            if dya and s in SECCIONES_GASTO and c["codigo"].startswith(dya):
+                dya_cuentas[cid] = dya_cuentas.get(cid, 0) + nat
+                continue
+            sec[s] += nat
+            if s in ("OI", "OG") and nat:
+                no_rec[cid] = (s, nat)
+        return sec, dya_cuentas, no_rec, mapa
+
+    def _cifras_ebitda(self, emp, desde, hasta, local_id=None, cc_id=None):
+        sec, dya_c, no_rec, mapa = self._er_detalle(emp, desde, hasta, local_id, cc_id)
+        dya = sum(dya_c.values())
+        bruto = sec["ING"] - sec["CV"]
+        ajustado = bruto - sec["GD"] - sec["GA"]
+        reportado = ajustado + sec["OI"] - sec["OG"]
+        ebit = reportado - dya
+        antes_imp = ebit + sec["IF"] - sec["CF"]
+        neto = antes_imp - sec["IR"]
+        return dict(sec=sec, dya=dya, dya_c=dya_c, no_rec=no_rec, mapa=mapa, bruto=bruto, ajustado=ajustado,
+                    reportado=reportado, ebit=ebit, antes_imp=antes_imp, neto=neto)
+
+    def estado_ebitda(self, emp, desde, hasta, local_id=None, cc_id=None):
+        desde, hasta = parse_fecha(desde), parse_fecha(hasta)
+        if desde > hasta:
+            raise ErrorContable("La fecha «desde» es posterior a «hasta».")
+        a = self._cifras_ebitda(emp, desde, hasta, local_id, cc_id)
+        b = self._cifras_ebitda(emp, _hace_un_anio(desde), _hace_un_anio(hasta), local_id, cc_id)
+        ventas = a["sec"]["ING"]
+        rep = Reporte("Estado de resultados en formato EBITDA",
+                      self._subtitulo(emp, f"Del {fmt_fecha(desde)} al {fmt_fecha(hasta)} · {self.texto_cifras(emp)}"
+                                      + self._filtros_texto(local_id, cc_id)),
+                      [("Concepto", "texto", 46), ("Período", "importe", 17), ("% de ventas", "texto", 11),
+                       ("Mismo período año anterior", "importe", 17), ("Variación", "texto", 10)])
+
+        def fila(texto, va, vb, estilo="normal", nivel=1, signo=1):
+            rep.agregar([texto, signo * va, _pct(va, ventas) if estilo != "titulo" else "", signo * vb,
+                         _var(va, vb)], estilo, nivel)
+        s, t = a["sec"], b["sec"]
+        fila(NOMBRES_SECCION["ING"], s["ING"], t["ING"])
+        fila("Costo de ventas (sin depreciaciones)", s["CV"], t["CV"], signo=-1)
+        fila("GANANCIA BRUTA", a["bruto"], b["bruto"], "subtotal", 0)
+        fila("Gastos de distribución y ventas (sin depreciaciones)", s["GD"], t["GD"], signo=-1)
+        fila("Gastos de administración (sin depreciaciones)", s["GA"], t["GA"], signo=-1)
+        fila("EBITDA AJUSTADO", a["ajustado"], b["ajustado"], "total", 0)
+        rep.agregar(["Partidas no recurrentes", None, "", None, ""], "subtitulo", 0)
+        ids = sorted(set(a["no_rec"]) | set(b["no_rec"]), key=lambda i: a["mapa"][i]["codigo"])
+        for cid in ids:
+            sa, va = a["no_rec"].get(cid, (None, 0))
+            sb, vb = b["no_rec"].get(cid, (None, 0))
+            sgn = 1 if (sa or sb) == "OI" else -1
+            c = a["mapa"][cid]
+            fila(f"{c['codigo']} {c['nombre']}", va, vb, signo=sgn, nivel=2)
+        if not ids:
+            rep.agregar(["(no hay otros ingresos ni otros gastos en el período)", None, "", None, ""], "normal", 2)
+        fila("EBITDA REPORTADO", a["reportado"], b["reportado"], "total", 0)
+        rep.agregar(["Depreciaciones y amortizaciones", None, "", None, ""], "subtitulo", 0)
+        for cid in sorted(set(a["dya_c"]) | set(b["dya_c"]), key=lambda i: a["mapa"][i]["codigo"]):
+            c = a["mapa"][cid]
+            fila(f"{c['codigo']} {c['nombre']}", a["dya_c"].get(cid, 0), b["dya_c"].get(cid, 0), signo=-1, nivel=2)
+        fila("RESULTADO OPERATIVO (EBIT)", a["ebit"], b["ebit"], "subtotal", 0)
+        fila(NOMBRES_SECCION["IF"], s["IF"], t["IF"])
+        fila(NOMBRES_SECCION["CF"], s["CF"], t["CF"], signo=-1)
+        fila("RESULTADO ANTES DEL IMPUESTO A LA RENTA", a["antes_imp"], b["antes_imp"], "subtotal", 0)
+        fila(NOMBRES_SECCION["IR"], s["IR"], t["IR"], signo=-1)
+        fila("RESULTADO DEL EJERCICIO", a["neto"], b["neto"], "total", 0)
+        control = self.resultado_periodo(emp, desde, hasta, local_id, cc_id)
+        rep.notas.append("EBITDA: resultado antes de intereses, impuestos, depreciaciones y amortizaciones. El ajustado "
+                         "deja fuera los otros ingresos y otros gastos (no recurrentes); el reportado los incluye.")
+        rep.notas.append("Depreciaciones y amortizaciones: " + (", ".join(
+            f"{a['mapa'][i]['codigo']}" for i in sorted(a["dya_c"], key=lambda i: a["mapa"][i]["codigo"])) or "ninguna")
+            + ". Se cambian en Tablero › Rubros….")
+        if control != a["neto"]:
+            rep.notas.append(f"ERROR: el resultado ({fmt_importe(a['neto'])}) no coincide con el estado de "
+                             f"resultados ({fmt_importe(control)}). Revise las secciones de las cuentas.")
+        elif not a["dya_c"]:
+            rep.notas.append("Atención: no se encontraron cuentas de depreciación o amortización; el EBITDA es igual "
+                             "al resultado operativo. Indíquelas en Tablero › Rubros….")
+        return rep
+
+    # ------------------------------------------------------------------ indicadores
+    def analisis_ebitda(self, emp, desde, hasta):
+        desde, hasta = parse_fecha(desde), parse_fecha(hasta)
+        cache = {}
+        v = self.valores_indicadores(emp, desde, hasta, None, cache)
+        va = self.valores_indicadores(emp, _hace_un_anio(desde), _hace_un_anio(hasta), None, {})
+        f12 = self._flujos(emp, _hace_un_anio(hasta, 1), hasta, None, cache)
+        rep12, aj12 = self.ebitdas(f12)
+        fin = self._saldos_a(emp, hasta, cache)
+        a = self._cifras_ebitda(emp, desde, hasta)
+        metas = self.metas(emp, self.ejercicio_de(emp, hasta))
+        rep = Reporte("Indicadores a partir del EBITDA",
+                      self._subtitulo(emp, f"Del {fmt_fecha(desde)} al {fmt_fecha(hasta)} · {self.texto_cifras(emp)}"),
+                      [("Concepto", "texto", 40), ("Valor", "texto", 16), ("Mismo período año anterior", "texto", 16),
+                       ("Rango aceptable", "texto", 18), ("Lectura", "texto", 70)])
+        rep.agregar(["Bases del cálculo", "", "", "", ""], "subtitulo", 0)
+        for texto, valor, lectura in (
+                ("EBITDA ajustado del período", a["ajustado"], "Lo que genera la operación habitual antes de "
+                                                               "depreciaciones, intereses e impuestos."),
+                ("EBITDA reportado del período", a["reportado"], "Incluye otros ingresos y otros gastos."),
+                ("EBITDA ajustado de los últimos 12 meses", aj12, f"Del {fmt_fecha(_hace_un_anio(hasta, 1))} al "
+                                                                  f"{fmt_fecha(hasta)}: base de los indicadores contra saldos."),
+                ("Deuda financiera", fin["deuda"], "Rubros " + ", ".join(self.rubros_ebitda(emp)["deuda"] or ("ninguno",))
+                                                   + " (préstamos, sobregiros, arrendamientos)."),
+                ("Efectivo y equivalentes", fin["disponible"], ""),
+                ("Deuda financiera neta", fin["deuda"] - fin["disponible"],
+                 "Negativa: hay más efectivo que deuda financiera (caja neta).")):
+            rep.agregar([texto, fmt_importe(valor), "", "", lectura], "normal", 1)
+        rep.agregar(["Indicadores", "", "", "", ""], "subtitulo", 0)
+        for k, (nombre, cat, unidad, sentido, formula) in INDICADORES.items():
+            if cat != "EBITDA":
+                continue
+            m = metas.get(k, {})
+            rango = texto_rango(m.get("minimo"), m.get("maximo"), unidad) if m else "sin meta"
+            rep.agregar([nombre, fmt_indicador(v[k], unidad) if v[k] is not None else "no aplica",
+                         fmt_indicador(va[k], unidad) if va[k] is not None else "sin datos",
+                         rango, self._lectura_ebitda(k, v[k], fin)], "normal", 1)
+        rep.notas.append("Fórmulas: " + " · ".join(f"{INDICADORES[k][0]} = {INDICADORES[k][4]}"
+                                                    for k in INDICADORES if INDICADORES[k][1] == "EBITDA"))
+        rep.notas.append("Los rangos aceptables son las metas de la empresa (Tablero › Metas…). Como referencia, muchos "
+                         "bancos miran con atención una deuda financiera neta mayor que 3 veces el EBITDA y una cobertura "
+                         "de intereses menor que 3 veces; el margen depende mucho del rubro.")
+        return rep
+
+    @staticmethod
+    def _lectura_ebitda(k, x, fin):
+        if x is None:
+            return {"EBD": "Con EBITDA cero o negativo el indicador no tiene sentido: la operación no genera caja.",
+                    "EBG": "No hay datos del mismo período del año anterior.",
+                    "EBC": "No hubo intereses perdidos en los últimos 12 meses.",
+                    "EBK": "Con EBITDA cero o negativo no se mide la conversión en caja."}.get(k, "")
+        n = f"{x:.1f}".replace(".", ",")
+        if k == "EBM":
+            return f"De cada $ 100 vendidos, quedan $ {n} de resultado operativo antes de depreciaciones."
+        if k == "EBC":
+            return f"El EBITDA de un año paga {n} veces los intereses de ese año."
+        if k == "EBD":
+            if x < 0:
+                return "Caja neta: el efectivo alcanza para cancelar toda la deuda financiera."
+            return f"Con el EBITDA de un año la deuda financiera neta se cancelaría en {n} años."
+        if k == "EBA":
+            return f"Cada $ 100 de activo generan $ {n} de EBITDA en un año."
+        if k == "EBK":
+            if x > 100:
+                return "El capital de trabajo liberó caja: entró más efectivo que el EBITDA."
+            return f"De cada $ 100 de EBITDA, $ {n} quedan como caja; el resto se fue a capital de trabajo."
+        if k == "EBG":
+            return f"El EBITDA ajustado {'creció' if x >= 0 else 'cayó'} {abs(x):.1f} % frente al mismo período del año " \
+                   "anterior.".replace(".", ",", 1)
+        return ""
+
+    # ------------------------------------------------------------------ patrimonio
+    def _columnas_patrimonio(self, emp, mapa):
+        """Rubros de patrimonio del tercer nivel (o cuentas que no tienen rubro de ese nivel), en orden."""
+        cols = {}
+        for c in sorted(mapa.values(), key=lambda x: x["codigo"]):
+            if c["seccion_ef"] != "PAT":
+                continue
+            if c["nivel"] == 3 or (c["nivel"] < 3 and c["imputable"]):
+                if not any(c["codigo"].startswith(k) for k in cols):
+                    cols[c["codigo"]] = c["nombre"]
+        return cols
+
+    def _columna_de(self, codigo, cols):
+        return next((k for k in cols if codigo.startswith(k)), None)
+
+    def _bloque_patrimonio(self, emp, ini, fin, mapa, cols, col_res):
+        """Saldos al inicio, movimientos clasificados y saldos al cierre de un ejercicio."""
+        antes = (_dt.date.fromisoformat(ini) - _dt.timedelta(days=1)).isoformat()
+        inicial = dict.fromkeys(cols, 0)
+        for cid, (d, h) in self.sumas(emp, None, antes).items():
+            c = mapa[cid]
+            if c["seccion_ef"] == "PAT":
+                inicial[self._columna_de(c["codigo"], cols)] += h - d
+        inicial[col_res] += self.resultado_periodo(emp, None, antes)     # resultados aún no refundidos
+        movs = {k: dict.fromkeys(cols, 0) for k, _ in FILAS_PATRIMONIO}
+        por_asiento = {}
+        for m in self.con.execute(
+                "SELECT m.asiento_id, m.cuenta_id, m.debe, m.haber, a.tipo, a.concepto FROM movimientos m JOIN asientos a "
+                "ON a.id=m.asiento_id WHERE a.empresa_id=? AND a.fecha>=? AND a.fecha<=?", (emp, ini, fin)):
+            por_asiento.setdefault(m["asiento_id"], []).append(m)
+        for lineas in por_asiento.values():
+            pat = [l for l in lineas if mapa[l["cuenta_id"]]["seccion_ef"] == "PAT"]
+            if not pat:
+                continue
+            otras = [mapa[l["cuenta_id"]] for l in lineas if mapa[l["cuenta_id"]]["seccion_ef"] != "PAT"]
+            texto = (lineas[0]["concepto"] or "").lower()
+            apertura = lineas[0]["tipo"] == "APERTURA" or "apertura" in texto or "saldos iniciales" in texto
+            for l in pat:
+                c = mapa[l["cuenta_id"]]
+                col = self._columna_de(c["codigo"], cols)
+                nat = l["haber"] - l["debe"]
+                fila = "apertura" if apertura else self._clasificar_patrimonio(c, nat, pat, otras, mapa, cols)
+                movs[fila][col] += nat
+        movs["resultado"][col_res] += self.resultado_periodo(emp, ini, fin)
+        final = {k: inicial[k] + sum(movs[f][k] for f in movs) for k in cols}
+        return inicial, movs, final
+
+    @staticmethod
+    def _clasificar_patrimonio(c, nat, pat, otras, mapa, cols):
+        from .planes import _clave
+        nombre = _clave(c["nombre"])
+        grupo = c["codigo"][:2]
+        rubro = _clave(next((cols[k] for k in cols if c["codigo"].startswith(k)), ""))
+        if not otras:                                   # movimiento solo entre cuentas de patrimonio
+            if nat > 0 and "reserva" in (nombre + rubro) and "revaluac" not in nombre:
+                return "reservas"
+            if nat > 0 and ("capital" in rubro or "aporte" in rubro):
+                return "capitalizacion"
+            if nat < 0:
+                destino = [mapa[l["cuenta_id"]] for l in pat if l["haber"] > 0]
+                if any("reserva" in _clave(d["nombre"]) for d in destino):
+                    return "reservas"
+                if any(d["codigo"][:2] == c["codigo"][:2] == "31" or "capital" in _clave(d["nombre"]) for d in destino):
+                    return "capitalizacion"
+            return "otros"
+        if "revaluac" in nombre or "reexpres" in nombre or grupo == "32" or "ajuste" in rubro:
+            return "revaluacion"
+        if "capital" in rubro or "aporte" in rubro or grupo == "31":
+            return "aportes" if nat > 0 else "reduccion"
+        contrapartidas = " ".join(_clave(o["nombre"]) for o in otras)
+        if nat < 0 and any(p in contrapartidas for p in ("dividend", "utilidades a pagar", "accionistas", "socios")):
+            return "distribucion"
+        if "anteriores" in nombre:
+            return "ajustes_ant"
+        if nat < 0 and any(o["seccion_ef"] in ("PC", "PNC", "AC") for o in otras):
+            return "distribucion"
+        return "otros"
+
+    def evolucion_patrimonio(self, emp, hasta):
+        hasta = parse_fecha(hasta)
+        mapa = self.mapa_cuentas(emp)
+        cols = self._columnas_patrimonio(emp, mapa)
+        if not cols:
+            raise ErrorContable("El plan no tiene cuentas de patrimonio.")
+        cta_res = self.cuenta_resultado_ejercicio(emp)
+        col_res = self._columna_de(cta_res["codigo"], cols) if cta_res else list(cols)[-1]
+        ini, fin_ej = self.ejercicio(emp, hasta)
+        fin = min(hasta, fin_ej)
+        ini_ant = _hace_un_anio(ini)
+        fin_ant = (_dt.date.fromisoformat(ini) - _dt.timedelta(days=1)).isoformat()
+        rep = Reporte("Estado de evolución del patrimonio",
+                      self._subtitulo(emp, f"Ejercicio del {fmt_fecha(ini)} al {fmt_fecha(fin)}, comparativo con el "
+                                      f"anterior · {self.texto_cifras(emp)}"),
+                      [("Concepto", "texto", 40)] + [(n, "importe", 15) for n in cols.values()]
+                      + [("Total", "importe", 16)])
+
+        def fila(texto, valores, estilo="normal", nivel=1):
+            rep.agregar([texto] + [valores[k] for k in cols] + [sum(valores.values())], estilo, nivel)
+        for titulo, (a, b) in (("Ejercicio anterior", (ini_ant, fin_ant)), ("Ejercicio actual", (ini, fin))):
+            inicial, movs, final = self._bloque_patrimonio(emp, a, b, mapa, cols, col_res)
+            rep.agregar([f"{titulo} ({fmt_fecha(a)} – {fmt_fecha(b)})"] + [None] * (len(cols) + 1), "titulo", 0)
+            fila(f"Saldos al {fmt_fecha((_dt.date.fromisoformat(a) - _dt.timedelta(days=1)).isoformat())}", inicial,
+                 "subtotal", 0)
+            for k, texto in FILAS_PATRIMONIO:
+                if any(movs[k].values()):
+                    fila(texto, movs[k])
+            fila(f"Saldos al {fmt_fecha(b)}", final, "total", 0)
+        esf = next((f.valores[2] for f in self.estado_situacion(emp, fin).filas if f.valores[0] == "TOTAL PATRIMONIO"),
+                   None)
+        if esf is not None and esf != sum(final.values()):
+            rep.notas.append(f"ERROR: el patrimonio final ({fmt_importe(sum(final.values()))}) no coincide con el estado "
+                             f"de situación ({fmt_importe(esf)}).")
+        else:
+            rep.notas.append(f"Control: el patrimonio al {fmt_fecha(fin)} coincide con el estado de situación financiera.")
+        rep.notas.append("Un asiento de tipo apertura, o cuyo concepto dice «apertura» o «saldos iniciales», se muestra "
+                         "como saldos iniciales. Los demás movimientos se clasifican por la cuenta de contrapartida de "
+                         "cada asiento: aportes (capital "
+                         "contra activo), distribución de utilidades (resultados o reservas contra un pasivo o el "
+                         "efectivo), constitución de reservas y capitalizaciones (entre cuentas de patrimonio), "
+                         "revaluación (ajustes al patrimonio). Lo que no encaja figura en «Otros movimientos».")
+        rep.notas.append(f"El resultado del ejercicio se suma en la columna «{cols[col_res]}», donde se refunde.")
+        return rep
+
+
+# ---------------------------------------------------------------------- flujos de efectivo
+# Decisiones del director (18/11/2026), NIIF para PYMES sección 7:
+#  - método directo; intereses y dividendos pagados en financiación, cobrados en inversión;
+#  - el efectivo de cada asiento se reparte en proporción entre las contrapartidas del otro lado (las que no son
+#    efectivo): lo que no movió efectivo no aparece (por ejemplo, un bien de uso pagado directo con un préstamo);
+#  - comparativo con el mismo período del año anterior y conciliación con el método indirecto.
+OPERACION = [("cobros_clientes", "Cobros a clientes"), ("otros_cobros", "Otros cobros de operación"),
+             ("pagos_proveedores", "Pagos a proveedores de bienes y servicios"),
+             ("pagos_personal", "Pagos al personal y cargas sociales"), ("pagos_impuestos", "Pagos de impuestos"),
+             ("otros_pagos", "Otros pagos de operación")]
+CLAVES_PERSONAL = ("sueldo", "jornal", "salario", "remunera", "aguinaldo", "bps", "cargas social", "licencia",
+                   "vacacional", "fonasa", "personal", "honorario")
+CLAVES_IMPUESTO = ("impuesto", "iva", "irae", "dgi", "fiscal", "tribut", "retencion", "icosa", "imeba")
+
+
+def _tiene(nombre, claves):
+    return any(k in nombre for k in claves)
+
+
+class FlujosMixin:
+    def _efectivo(self, emp):
+        return tuple(self.rubros_tablero(emp)["disponible"])
+
+    def _actividad(self, c, mapa, deuda, dif):
+        """(actividad, clave) de una cuenta de contrapartida, sin mirar el sentido. actividad: op, inv, fin, tc."""
+        from .planes import _clave
+        n = _clave(c["nombre"])
+        s = c["seccion_ef"]
+        rubro = _clave(mapa[c["padre_id"]]["nombre"]) if c.get("padre_id") in mapa else ""
+        if c["id"] in dif:
+            return "tc", "efecto_tc"
+        if "interes" in n:
+            return ("inv", "intereses_cobrados") if s in ("IF", "OI", "AC", "ANC") else ("fin", "intereses_pagados")
+        if "dividend" in n:
+            return ("inv", "dividendos_cobrados") if s in ("IF", "OI", "AC", "ANC") else ("fin", "dividendos_pagados")
+        if s == "PAT":
+            return "fin", "patrimonio"
+        if deuda and c["codigo"].startswith(deuda):
+            return "fin", "prestamos"
+        if s == "ANC" and not _tiene(n + " " + rubro, ("cobrar", "impuesto", "credito")):
+            return "inv", "anc"
+        if s == "AC" and _tiene(rubro, ("financier", "inversion", "colocacion")):
+            return "inv", "anc"
+        return "op", None
+
+    def _concepto_op(self, c, mapa, rub, entra, hay):
+        """Línea de operación para una contrapartida. hay: conjunto de tipos presentes en el asiento."""
+        from .planes import _clave
+        n = _clave(c["nombre"]) + " " + _clave(mapa[c["padre_id"]]["nombre"] if c.get("padre_id") in mapa else "")
+        s = c["seccion_ef"]
+        if entra:
+            return "cobros_clientes" if ("clientes" in hay) else "otros_cobros"
+        if _tiene(n, CLAVES_PERSONAL) and not _tiene(n, CLAVES_IMPUESTO + ("proveed",)):
+            return "pagos_personal"
+        if s == "IR" or (_tiene(n, CLAVES_IMPUESTO) and "proveedores" not in hay):
+            return "pagos_impuestos"
+        if _tiene(n, CLAVES_IMPUESTO):
+            return "pagos_proveedores"                      # IVA pagado al proveedor junto con la compra
+        if s in ("CV", "GD", "GA") or c["codigo"].startswith(rub["proveedores"] + rub["inventario"]):
+            return "pagos_proveedores"
+        return "otros_pagos"
+
+    def _flujos_efectivo(self, emp, desde, hasta):
+        """{(actividad, clave, etiqueta): importe} y el efecto del tipo de cambio, para el período."""
+        from .planes import _clave
+        mapa = self.mapa_cuentas(emp)
+        caja = self._efectivo(emp)
+        rub = self.rubros_tablero(emp)
+        deuda = self.rubros_ebitda(emp)["deuda"]
+        try:
+            g, p = self.cuentas_dif_cambio(emp)
+            dif = {g["id"], p["id"]}
+        except ErrorContable:
+            dif = set()
+        lineas = {}
+        aperturas = self._aperturas(emp, desde, hasta)
+        for m in self.con.execute(
+                "SELECT m.asiento_id, m.cuenta_id, m.debe, m.haber FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+                "WHERE a.empresa_id=? AND a.fecha>=? AND a.fecha<=? ORDER BY m.asiento_id, m.orden", (emp, desde, hasta)):
+            lineas.setdefault(m["asiento_id"], []).append(m)
+        out = {}
+        for aid, movs in lineas.items():
+            neto = sum(l["debe"] - l["haber"] for l in movs if mapa[l["cuenta_id"]]["codigo"].startswith(caja))
+            if not neto:
+                continue
+            if aid in aperturas:                             # saldos iniciales: no son un flujo del período
+                out[("ape", "apertura", "Efectivo incorporado con el asiento de apertura")] = \
+                    out.get(("ape", "apertura", "Efectivo incorporado con el asiento de apertura"), 0) + neto
+                continue
+            entra = neto > 0
+            otras = [l for l in movs if not mapa[l["cuenta_id"]]["codigo"].startswith(caja)
+                     and (l["haber"] if entra else l["debe"]) > 0]
+            sin_dif = [l for l in otras if l["cuenta_id"] not in dif]
+            if sin_dif:
+                otras = sin_dif                              # la diferencia de cambio sigue a la operación
+            if not otras:
+                continue
+            tipos = set()
+            clas = []
+            for l in otras:
+                c = mapa[l["cuenta_id"]]
+                act, clave = self._actividad(c, mapa, deuda, dif)
+                if act == "op":
+                    if c["seccion_ef"] == "ING" or c["codigo"].startswith(rub["deudores"]):
+                        tipos.add("clientes")
+                    if c["seccion_ef"] in ("CV",) or c["codigo"].startswith(rub["proveedores"] + rub["inventario"]):
+                        tipos.add("proveedores")
+                if act == "inv":
+                    tipos.add("inversion")
+                clas.append((l, c, act, clave))
+            pesos = [(l["haber"] if entra else l["debe"]) for l, *_ in clas]
+            total = sum(pesos)
+            partes = [abs(neto) * w // total for w in pesos]
+            partes[pesos.index(max(pesos))] += abs(neto) - sum(partes)
+            for (l, c, act, clave), parte in zip(clas, partes):
+                if not parte:
+                    continue
+                if act == "op" and "inversion" in tipos and c["seccion_ef"] in ("OI", "OG"):
+                    act, clave = "inv", "anc"                # resultado por la venta de un bien de uso
+                    c = next((mapa[x["cuenta_id"]] for x, cc, a, k in clas if a == "inv"), c)
+                if act == "op":
+                    clave = self._concepto_op(c, mapa, rub, entra, tipos)
+                    etiqueta = dict(OPERACION)[clave]
+                elif act == "tc":
+                    etiqueta = "Efecto de las variaciones del tipo de cambio sobre el efectivo"
+                elif clave == "anc":
+                    rubro = mapa.get(c["padre_id"]) if c.get("padre_id") in mapa else c
+                    while rubro and rubro["nivel"] > 3 and rubro.get("padre_id") in mapa:
+                        rubro = mapa[rubro["padre_id"]]
+                    nombre = (rubro or c)["nombre"]
+                    etiqueta = f"{'Cobros por venta de' if entra else 'Pagos por compra de'} {nombre[0].lower() + nombre[1:]}"
+                    clave = f"anc:{entra}:{nombre}"
+                elif clave == "prestamos":
+                    etiqueta = "Préstamos obtenidos" if entra else "Pagos de préstamos y arrendamientos"
+                    clave = f"prestamos:{entra}"
+                elif clave == "patrimonio":
+                    capital = c["codigo"][:2] == "31" or _tiene(_clave(c["nombre"]), ("capital", "aporte"))
+                    etiqueta = ("Aportes de los propietarios" if entra else
+                                "Reintegros de capital" if capital else "Dividendos pagados")
+                    clave = "dividendos_pagados" if etiqueta == "Dividendos pagados" else f"patrimonio:{entra}"
+                else:
+                    etiqueta = {"intereses_cobrados": "Intereses cobrados", "intereses_pagados": "Intereses pagados",
+                                "dividendos_cobrados": "Dividendos cobrados",
+                                "dividendos_pagados": "Dividendos pagados"}[clave]
+                k = (act, clave, etiqueta)
+                out[k] = out.get(k, 0) + (parte if entra else -parte)
+        return out
+
+    def _aperturas(self, emp, desde, hasta):
+        """Asientos de saldos iniciales del período: tipo APERTURA o concepto con «apertura» o «saldos iniciales»."""
+        return {r["id"] for r in self.con.execute(
+            "SELECT id, tipo, concepto FROM asientos WHERE empresa_id=? AND fecha>=? AND fecha<=?", (emp, desde, hasta))
+            if r["tipo"] == "APERTURA" or any(k in (r["concepto"] or "").lower() for k in ("apertura", "saldos iniciales"))}
+
+    def _saldo_efectivo(self, emp, fecha):
+        caja = self._efectivo(emp)
+        mapa = self.mapa_cuentas(emp)
+        return sum(d - h for cid, (d, h) in self.sumas(emp, None, fecha).items() if mapa[cid]["codigo"].startswith(caja))
+
+    def _indirecto(self, emp, desde, hasta, flujos):
+        """Conciliación: resultado + partidas que no son efectivo u operación ± capital de trabajo de operación."""
+        mapa = self.mapa_cuentas(emp)
+        caja = self._efectivo(emp)
+        deuda = self.rubros_ebitda(emp)["deuda"]
+        try:
+            g, p = self.cuentas_dif_cambio(emp)
+            dif = {g["id"], p["id"]}
+        except ErrorContable:
+            dif = set()
+        dya = self.rubros_ebitda(emp)["dya"]
+        aperturas = self._aperturas(emp, desde, hasta)
+        por_asiento = {}
+        for r in self.con.execute(
+                "SELECT m.cuenta_id, m.asiento_id, m.debe, m.haber FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+                "WHERE a.empresa_id=? AND a.fecha>=? AND a.fecha<=?", (emp, desde, hasta)):
+            if r["asiento_id"] not in aperturas:
+                por_asiento.setdefault(r["asiento_id"], []).append(r)
+        resultado = dep = otros_res = cto = 0
+        for movs in por_asiento.values():
+            act = {l["cuenta_id"]: self._actividad(mapa[l["cuenta_id"]], mapa, deuda, dif)[0] for l in movs}
+            # un interés o dividendo registrado contra una cuenta de operación (deudores, proveedores) se cobra o
+            # se paga con ella: queda en operación, igual que en el método directo
+            con_op = any(act[l["cuenta_id"]] == "op" and mapa[l["cuenta_id"]]["seccion_ef"] not in SECCIONES_ER
+                         and not mapa[l["cuenta_id"]]["codigo"].startswith(caja) for l in movs)
+            con_inv = any(act[l["cuenta_id"]] == "inv" and mapa[l["cuenta_id"]]["seccion_ef"] not in SECCIONES_ER
+                          for l in movs)
+            for l in movs:
+                c = mapa[l["cuenta_id"]]
+                s_ = c["seccion_ef"]
+                d, h = l["debe"], l["haber"]
+                if s_ in SECCIONES_ER:
+                    resultado += h - d
+                if c["codigo"].startswith(caja) or l["cuenta_id"] in dif:
+                    continue                                 # la diferencia de cambio queda donde se generó
+                if s_ in SECCIONES_ER:
+                    if dya and s_ in SECCIONES_GASTO and c["codigo"].startswith(dya):
+                        dep += d - h
+                    elif act[l["cuenta_id"]] != "op" and not con_op:
+                        otros_res += d - h                   # intereses y dividendos de inversión o financiación
+                    elif con_inv and s_ in ("OI", "OG"):
+                        otros_res += d - h                   # ganancia o pérdida por la venta de un bien de uso
+                elif act[l["cuenta_id"]] == "op" and s_ in ("AC", "PC", "ANC", "PNC"):
+                    cto += h - d                             # aumento de un activo: menos efectivo
+        filas = [("Resultado del ejercicio", resultado)]
+        tc = sum(v for (a, _, _), v in flujos.items() if a == "tc")
+        filas.append(("Depreciaciones y amortizaciones", dep))
+        filas.append(("Intereses, dividendos y resultados por venta de bienes de uso (van en inversión o "
+                      "financiación)", otros_res))
+        filas.append(("Diferencia de cambio sobre el efectivo (se presenta aparte)", -tc))
+        filas.append(("Variación de créditos, inventarios y deudas de operación", cto))
+        indirecto = sum(v for _, v in filas)
+        directo = sum(v for (a, _, _), v in flujos.items() if a == "op")
+        return filas, indirecto, directo
+
+    def estado_flujos_efectivo(self, emp, desde, hasta):
+        desde, hasta = parse_fecha(desde), parse_fecha(hasta)
+        if desde > hasta:
+            raise ErrorContable("La fecha «desde» es posterior a «hasta».")
+        d_ant, h_ant = _hace_un_anio(desde), _hace_un_anio(hasta)
+        a, b = self._flujos_efectivo(emp, desde, hasta), self._flujos_efectivo(emp, d_ant, h_ant)
+        antes = lambda f: (_dt.date.fromisoformat(f) - _dt.timedelta(days=1)).isoformat()   # noqa: E731
+        rep = Reporte("Estado de flujos de efectivo (método directo)",
+                      self._subtitulo(emp, f"Del {fmt_fecha(desde)} al {fmt_fecha(hasta)} · {self.texto_cifras(emp)}"),
+                      [("Concepto", "texto", 56), ("Período", "importe", 17),
+                       ("Mismo período año anterior", "importe", 17)])
+        totales = {}
+        for act, titulo in (("op", "ACTIVIDADES DE OPERACIÓN"), ("inv", "ACTIVIDADES DE INVERSIÓN"),
+                            ("fin", "ACTIVIDADES DE FINANCIACIÓN")):
+            rep.agregar([titulo, None, None], "titulo", 0)
+            if act == "op":
+                claves = [(act, k, t) for k, t in OPERACION]
+            else:
+                claves = sorted({k for k in list(a) + list(b) if k[0] == act}, key=lambda k: (k[2].startswith("Pagos"), k[2]))
+            for k in claves:
+                va, vb = a.get(k, 0), b.get(k, 0)
+                if va or vb or act == "op":
+                    rep.agregar([k[2], va, vb], "normal", 1)
+            ta, tb = (sum(v for k, v in f.items() if k[0] == act) for f in (a, b))
+            totales[act] = (ta, tb)
+            nombre = {"op": "operación", "inv": "inversión", "fin": "financiación"}[act]
+            rep.agregar([f"Flujo neto de las actividades de {nombre}", ta, tb], "subtotal", 0)
+        tc = tuple(sum(v for k, v in f.items() if k[0] == "tc") for f in (a, b))
+        rep.agregar(["Efecto de las variaciones del tipo de cambio sobre el efectivo", tc[0], tc[1]], "normal", 0)
+        neto = tuple(sum(totales[x][i] for x in totales) + tc[i] for i in (0, 1))
+        rep.agregar(["AUMENTO (DISMINUCIÓN) NETO DEL EFECTIVO Y EQUIVALENTES", neto[0], neto[1]], "total", 0)
+        ini = (self._saldo_efectivo(emp, antes(desde)), self._saldo_efectivo(emp, antes(d_ant)))
+        ape = tuple(sum(v for k, v in f.items() if k[0] == "ape") for f in (a, b))
+        if any(ape):
+            rep.agregar(["Efectivo incorporado con el asiento de apertura", ape[0], ape[1]], "normal", 0)
+            neto = (neto[0] + ape[0], neto[1] + ape[1])
+        fin = (self._saldo_efectivo(emp, hasta), self._saldo_efectivo(emp, h_ant))
+        rep.agregar([f"Efectivo y equivalentes al {fmt_fecha(antes(desde))}", ini[0], ini[1]], "normal", 0)
+        rep.agregar([f"Efectivo y equivalentes al {fmt_fecha(hasta)}", fin[0], fin[1]], "total", 0)
+        # conciliación con el método indirecto
+        filas, indirecto, directo = self._indirecto(emp, desde, hasta, a)
+        rep.agregar(["CONCILIACIÓN CON EL MÉTODO INDIRECTO (período)", None, None], "titulo", 0)
+        for texto, v in filas:
+            rep.agregar([texto, v, None], "normal", 1)
+        rep.agregar(["Flujo de operación según el método indirecto", indirecto, None], "subtotal", 0)
+        rep.agregar(["Flujo de operación según el método directo", directo, None], "subtotal", 0)
+        rep.agregar(["Diferencia: operaciones entre actividades que no movieron efectivo", directo - indirecto, None],
+                    "normal", 1)
+        caja = ", ".join(self._efectivo(emp))
+        if ini[0] + neto[0] != fin[0]:
+            rep.notas.append(f"ERROR: el efectivo inicial más el aumento neto ({fmt_importe(ini[0] + neto[0])}) no "
+                             f"coincide con el saldo final ({fmt_importe(fin[0])}).")
+        else:
+            rep.notas.append(f"Control: efectivo inicial + aumento neto = efectivo final (rubro {caja}).")
+        rep.notas.append("Método directo: cada asiento que mueve efectivo se clasifica por su contrapartida; si tiene varias, "
+                         "el efectivo se reparte en proporción entre las del otro lado. Lo que no movió efectivo (por "
+                         "ejemplo, un bien de uso pagado directamente con un préstamo) no figura, como pide la sección 7.")
+        rep.notas.append("El asiento de apertura (tipo apertura, o con «apertura» o «saldos iniciales» en el concepto) "
+                         "incorpora los saldos iniciales: no es un flujo del período y se muestra aparte.")
+        rep.notas.append("Intereses y dividendos pagados: financiación. Intereses y dividendos cobrados: inversión. "
+                         "La diferencia de cambio sobre el efectivo en moneda extranjera va en su línea propia.")
+        rep.notas.append("La conciliación usa el método indirecto como control. Si queda una diferencia, son operaciones "
+                         "que cruzan actividades sin efectivo (por ejemplo, una compra de bienes de uso a proveedores): "
+                         "conviene revisarlas y mencionarlas en notas.")
+        return rep

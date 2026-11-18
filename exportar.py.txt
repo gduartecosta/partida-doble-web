@@ -1,0 +1,168 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+#
+# Este programa es software libre: puede redistribuirlo y/o modificarlo bajo
+# los términos de la Licencia Pública General GNU (GPL) publicada por la Free
+# Software Foundation, ya sea la versión 3 de la Licencia o (a su elección)
+# cualquier versión posterior.
+#
+# Este programa se distribuye con la esperanza de que sea útil, pero SIN
+# GARANTÍA ALGUNA; ni siquiera la garantía implícita de COMERCIABILIDAD o de
+# IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Consulte la Licencia Pública General
+# GNU para más detalles. Debería haber recibido una copia junto con este
+# programa (archivo LICENSE); si no, vea <https://www.gnu.org/licenses/>.
+
+"""Exportación de cualquier Reporte a Excel (.xlsx) o PDF."""
+import datetime as _dt
+
+from .contabilidad import fmt_importe
+
+PIE = "Partida Doble — sistema contable didáctico"
+
+
+def _faltante(lib):
+    raise RuntimeError(f"Falta la librería «{lib}». Ejecute instalar.bat (Windows) "
+                       f"o: pip install {lib}")
+
+
+def a_excel(rep, ruta):
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        _faltante("openpyxl")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = rep.titulo[:31].replace("/", "-")
+    ncol = len(rep.columnas)
+    ws.cell(1, 1, rep.titulo).font = Font(bold=True, size=14)
+    for i, linea in enumerate(rep.subtitulo.split("\n"), 2):
+        ws.cell(i, 1, linea).font = Font(italic=True, color="555555")
+    fila = 2 + len(rep.subtitulo.split("\n")) + 1
+    gris = PatternFill("solid", fgColor="DDE3EA")
+    claro = PatternFill("solid", fgColor="F1F4F7")
+    alerta = PatternFill("solid", fgColor="FBE3E1")
+    fino = Side(style="thin", color="888888")
+    for j, (nombre, tipo, ancho) in enumerate(rep.columnas, 1):
+        c = ws.cell(fila, j, nombre)
+        c.font = Font(bold=True)
+        c.fill = gris
+        c.alignment = Alignment(horizontal="right" if tipo == "importe" else "left")
+        ws.column_dimensions[get_column_letter(j)].width = ancho + 2
+    ws.freeze_panes = ws.cell(fila + 1, 1)
+    for f in rep.filas:
+        fila += 1
+        for j, ((_, tipo, _), v) in enumerate(zip(rep.columnas, f.valores), 1):
+            if tipo == "importe" and v is not None:
+                c = ws.cell(fila, j, v / 100)
+                c.number_format = '#,##0.00;(#,##0.00);"-"'
+            else:
+                c = ws.cell(fila, j, v)
+                if j - 1 == col_sangria(rep) and f.nivel:
+                    c.alignment = Alignment(indent=f.nivel)
+            if f.estilo in ("titulo", "total", "subtotal", "subtitulo"):
+                c.font = Font(bold=True, size=12 if f.estilo == "titulo" else 11)
+            if f.estilo == "total":
+                c.border = Border(top=fino, bottom=Side(style="double", color="444444"))
+            if f.estilo == "subtitulo":
+                c.fill = claro
+            if f.estilo == "alerta":
+                c.fill = alerta
+    fila += 2
+    for n in rep.notas:
+        ws.cell(fila, 1, n).font = Font(italic=True)
+        fila += 1
+    ws.cell(fila + 1, 1, f"{PIE} · emitido el {_dt.datetime.now():%d/%m/%Y %H:%M}").font = Font(size=8, color="888888")
+    ws.page_setup.orientation = "landscape" if ncol > 4 else "portrait"
+    ws.page_setup.fitToWidth = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToHeight = 0
+    wb.save(ruta)
+
+
+def a_pdf(rep, ruta):
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    except ImportError:
+        _faltante("reportlab")
+    ancho_total = sum(a for _, _, a in rep.columnas)
+    pagina = landscape(A4) if len(rep.columnas) > 4 else A4
+    util = pagina[0] - 30 * mm
+    anchos = [util * a / ancho_total for _, _, a in rep.columnas]
+    emitido = f"{_dt.datetime.now():%d/%m/%Y %H:%M}"
+
+    def pie(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.grey)
+        canvas.drawString(15 * mm, 10 * mm, f"{PIE} · emitido el {emitido}")
+        canvas.drawRightString(pagina[0] - 15 * mm, 10 * mm, f"Página {doc.page}")
+        canvas.restoreState()
+
+    doc = SimpleDocTemplate(ruta, pagesize=pagina, leftMargin=15 * mm, rightMargin=15 * mm,
+                            topMargin=15 * mm, bottomMargin=18 * mm, title=rep.titulo)
+    est_tit = ParagraphStyle("t", fontName="Helvetica-Bold", fontSize=15, leading=19)
+    est_sub = ParagraphStyle("s", fontName="Helvetica", fontSize=9, leading=12, textColor=colors.HexColor("#555555"))
+    est_cel = ParagraphStyle("c", fontName="Helvetica", fontSize=8.5, leading=10.5)
+    est_nota = ParagraphStyle("n", fontName="Helvetica-Oblique", fontSize=8.5, leading=11)
+    historia = [Paragraph(rep.titulo, est_tit)]
+    for linea in rep.subtitulo.split("\n"):
+        historia.append(Paragraph(_esc(linea), est_sub))
+    historia.append(Spacer(1, 6 * mm))
+
+    datos = [[n for n, _, _ in rep.columnas]]
+    estilos = [
+        ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DDE3EA")),
+        ("FONT", (0, 1), (-1, -1), "Helvetica", 8.5),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]
+    for j, (_, tipo, _) in enumerate(rep.columnas):
+        if tipo == "importe":
+            estilos.append(("ALIGN", (j, 0), (j, -1), "RIGHT"))
+    for i, f in enumerate(rep.filas, 1):
+        fila = []
+        for j, ((_, tipo, _), v) in enumerate(zip(rep.columnas, f.valores)):
+            if tipo == "importe":
+                fila.append(fmt_importe(v) if v is not None else "")
+            else:
+                texto = "" if v is None else str(v)
+                negrita = f.estilo in ("titulo", "total", "subtotal", "subtitulo")
+                sangria = "&nbsp;" * (3 * f.nivel) if j == col_sangria(rep) else ""
+                t = sangria + _esc(texto)
+                fila.append(Paragraph(f"<b>{t}</b>" if negrita else t, est_cel))
+        datos.append(fila)
+        if f.estilo in ("titulo", "total", "subtotal", "subtitulo"):
+            estilos.append(("FONT", (0, i), (-1, i), "Helvetica-Bold", 8.5))
+        if f.estilo == "total":
+            estilos.append(("LINEABOVE", (0, i), (-1, i), 0.6, colors.black))
+        if f.estilo == "subtitulo":
+            estilos.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F1F4F7")))
+        if f.estilo == "alerta":
+            estilos.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#FBE3E1")))
+    tabla = Table(datos, colWidths=anchos, repeatRows=1)
+    tabla.setStyle(TableStyle(estilos))
+    historia.append(tabla)
+    if rep.notas:
+        historia.append(Spacer(1, 5 * mm))
+        for n in rep.notas:
+            historia.append(Paragraph(_esc(n), est_nota))
+    doc.build(historia, onFirstPage=pie, onLaterPages=pie)
+
+
+def col_sangria(rep):
+    """Columna que lleva la sangría jerárquica (la del nombre de la cuenta o concepto)."""
+    for j, (nombre, _, _) in enumerate(rep.columnas):
+        if nombre in ("Cuenta", "Concepto"):
+            return j
+    return 0
+
+
+def _esc(t):
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

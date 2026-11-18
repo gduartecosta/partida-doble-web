@@ -1,0 +1,328 @@
+# Partida Doble — sistema contable didáctico
+# Copyright (C) 2026 Gustavo Duarte
+# Licencia Pública General GNU (GPL), versión 3 o posterior (ver LICENSE).
+"""Cierre del ejercicio (7.6) y vista de informes.
+
+Cierre (se ejecuta a mano, desde Asientos › «Cierre de ejercicio…»):
+  1. Revaluación de los saldos en moneda extranjera de todas las monedas a la fecha de cierre (opcional).
+  2. Refundición: las cuentas de resultados del ejercicio se cancelan contra «Resultado del ejercicio».
+  3. Cierre: se cancelan todas las cuentas patrimoniales (y las de orden).
+  4. Apertura: el día siguiente se reabren con los mismos importes (es el asiento de cierre invertido).
+Decisiones del director (18/11/2026):
+  - Cerrado el ejercicio, no se registra, modifica ni elimina nada con fecha del ejercicio cerrado. Las
+    correcciones posteriores se registran en el ejercicio abierto (contra resultados de ejercicios anteriores).
+  - Los tres asientos se pueden deshacer y volver a generar.
+  - Los informes ignoran los tres asientos. En los ejercicios siguientes se conserva el efecto de la
+    refundición (el resultado pasó al patrimonio); el cierre y la apertura se anulan entre sí.
+
+Vista de informes: los informes (que están congelados) se calculan sobre una copia en memoria de la base, donde
+se quitan los asientos de cierre y, si se pide, los importes se convierten a otra moneda con un solo tipo de
+cambio o se reexpresan por un índice de precios. Así el código de cada informe no cambia.
+"""
+import datetime as _dt
+import sqlite3
+
+from .base import ErrorContable, fmt_fecha, fmt_importe, parse_fecha, SECCIONES_ER
+
+TIPOS_CIERRE = ("REFUNDICION", "CIERRE", "APERTURA")
+NOMBRES_TIPO = {"REFUNDICION": "Refundición de resultados", "CIERRE": "Cierre del ejercicio",
+                "APERTURA": "Apertura del ejercicio"}
+SECCIONES_PATRIMONIALES = ("AC", "ANC", "PC", "PNC", "PAT", "ORD")
+
+
+def _d(iso):
+    return _dt.date.fromisoformat(iso)
+
+
+def _mas_meses(d, n):
+    m = d.month - 1 + n
+    return d.replace(year=d.year + m // 12, month=m % 12 + 1, day=1)
+
+
+class CierreMixin:
+    # ------------------------------------------------------------------ ejercicios
+    def ejercicio(self, emp, fecha):
+        """(inicio, fin) en AAAA-MM-DD del ejercicio de 12 meses que contiene la fecha."""
+        ini = _d(self.ejercicio_de(emp, fecha))
+        fin = _mas_meses(ini, 12) - _dt.timedelta(days=1)
+        return ini.isoformat(), fin.isoformat()
+
+    def cierres(self, emp):
+        """Ejercicios cerrados, del más antiguo al más reciente: dict inicio, fin, ids de los tres asientos."""
+        out = []
+        for a in self.con.execute("SELECT id, fecha FROM asientos WHERE empresa_id=? AND tipo='CIERRE' "
+                                  "ORDER BY fecha", (emp,)).fetchall():
+            fin = a["fecha"]
+            ini, _ = self.ejercicio(emp, fin)
+            siguiente = (_d(fin) + _dt.timedelta(days=1)).isoformat()
+            ref = self.con.execute("SELECT id FROM asientos WHERE empresa_id=? AND tipo='REFUNDICION' AND fecha=?",
+                                   (emp, fin)).fetchone()
+            ape = self.con.execute("SELECT id FROM asientos WHERE empresa_id=? AND tipo='APERTURA' AND fecha=?",
+                                   (emp, siguiente)).fetchone()
+            out.append(dict(inicio=ini, fin=fin, cierre_id=a["id"], refundicion_id=ref["id"] if ref else None,
+                            apertura_id=ape["id"] if ape else None))
+        return out
+
+    def cerrado_hasta(self, emp):
+        """Último día cerrado (AAAA-MM-DD) o None."""
+        r = self.con.execute("SELECT MAX(fecha) FROM asientos WHERE empresa_id=? AND tipo='CIERRE'",
+                             (emp,)).fetchone()[0]
+        return r
+
+    def verificar_periodo_abierto(self, emp, fecha, accion="registrar"):
+        hasta = self.cerrado_hasta(emp)
+        if hasta and parse_fecha(fecha) <= hasta:
+            raise ErrorContable(
+                f"El ejercicio que termina el {fmt_fecha(hasta)} está cerrado: no se puede {accion} asientos con "
+                f"fecha {fmt_fecha(hasta)} o anterior. Las correcciones se registran en el ejercicio abierto, "
+                "contra «Resultados de ejercicios anteriores», o se deshace el cierre (Asientos › Cierre de "
+                "ejercicio…).")
+
+    def ids_cierre(self, emp):
+        return {i for c in self.cierres(emp) for i in (c["refundicion_id"], c["cierre_id"], c["apertura_id"]) if i}
+
+    # ------------------------------------------------------------------ cuenta de resultado
+    def cuenta_resultado_ejercicio(self, emp):
+        e = self.empresa(emp)
+        if e["cta_resultado_ejercicio"]:
+            c = self.cuenta(e["cta_resultado_ejercicio"])
+            if c and c["empresa_id"] == emp and c["imputable"]:
+                return c
+        mapa = self.mapa_cuentas(emp)
+        for c in sorted(mapa.values(), key=lambda x: x["codigo"]):
+            if c["imputable"] and c["seccion_ef"] == "PAT" and c["nombre"].strip().lower() == "resultado del ejercicio":
+                return self.cuenta(c["id"])
+        return None
+
+    def fijar_cuenta_resultado_ejercicio(self, emp, cuenta_id):
+        c = self.cuenta(cuenta_id)
+        if not c or c["empresa_id"] != emp or not c["imputable"]:
+            raise ErrorContable("La cuenta de resultado del ejercicio debe ser una cuenta con movimiento de la empresa.")
+        if self.mapa_cuentas(emp)[c["id"]]["seccion_ef"] != "PAT":
+            raise ErrorContable(f"{c['codigo']} {c['nombre']} no es una cuenta de patrimonio.")
+        with self.con:
+            self.con.execute("UPDATE empresas SET cta_resultado_ejercicio=? WHERE id=?", (cuenta_id, emp))
+
+    # ------------------------------------------------------------------ cálculo
+    def _saldos_grupo(self, emp, desde, hasta, secciones):
+        """Saldos (debe − haber) y saldo en ME por cuenta, cliente o proveedor, local y centro de costos."""
+        mapa = self.mapa_cuentas(emp)
+        filtro = "AND a.fecha>=?" if desde else ""
+        params = (emp, hasta) + ((desde,) if desde else ())
+        filas = self.con.execute(
+            "SELECT m.cuenta_id, m.tercero_id, COALESCE(m.local_id, a.local_id) AS loc, m.cc_id, "
+            "SUM(m.debe - m.haber) AS saldo, "
+            "SUM(CASE WHEN m.debe>0 THEN COALESCE(m.importe_me,0) ELSE -COALESCE(m.importe_me,0) END) AS me "
+            "FROM movimientos m JOIN asientos a ON a.id=m.asiento_id "
+            f"WHERE a.empresa_id=? AND a.fecha<=? {filtro} "
+            "GROUP BY m.cuenta_id, m.tercero_id, loc, m.cc_id", params).fetchall()
+        out = []
+        for f in filas:
+            c = mapa[f["cuenta_id"]]
+            if c["seccion_ef"] in secciones and (f["saldo"] or f["me"]):
+                out.append(dict(f, codigo=c["codigo"], moneda=c["moneda"]))
+        out.sort(key=lambda x: (x["codigo"], x["loc"] or 0, x["cc_id"] or 0, x["tercero_id"] or 0))
+        return out
+
+    @staticmethod
+    def _linea_cancela(g, concepto):
+        """Línea que deja en cero el saldo del grupo (también en moneda extranjera)."""
+        s, me = g["saldo"], g["me"]
+        lin = dict(cuenta_id=g["cuenta_id"], concepto=concepto, debe=max(-s, 0), haber=max(s, 0),
+                   tercero_id=g["tercero_id"], local_id=g["loc"], cc_id=g["cc_id"])
+        if g["moneda"]:
+            lin["moneda"] = g["moneda"]
+            if me and s:
+                lin["importe_me"] = abs(me)
+                lin["tipo_cambio"] = round(abs(s) / abs(me) / 1.0, 10)
+        return lin
+
+    def preparar_cierre(self, emp, fin, revaluar=True, cta_resultado_id=None):
+        """Calcula, sin registrar, los asientos del cierre del ejercicio que termina en 'fin'.
+        Devuelve dict con inicio, fin, apertura (fecha), revaluacion (lineas o None), refundicion, cierre,
+        apertura_lineas, resultado (ganancia > 0), cuenta_resultado y avisos."""
+        fin = parse_fecha(fin)
+        ini, fin_ej = self.ejercicio(emp, fin)
+        if fin != fin_ej:
+            raise ErrorContable(f"El {fmt_fecha(fin)} no es el último día de un ejercicio de la empresa "
+                                f"(el ejercicio va del {fmt_fecha(ini)} al {fmt_fecha(fin_ej)}).")
+        hecho = self.cerrado_hasta(emp)
+        if hecho and fin <= hecho:
+            raise ErrorContable(f"El ejercicio que termina el {fmt_fecha(fin)} ya está cerrado.")
+        avisos = []
+        anterior = (_d(ini) - _dt.timedelta(days=1)).isoformat()
+        sin_cerrar = [g for g in self._saldos_grupo(emp, None, anterior, SECCIONES_ER)
+                      if not hecho or hecho < anterior]
+        if sin_cerrar and (not hecho or hecho < anterior):
+            avisos.append(f"Hay resultados con fecha anterior al {fmt_fecha(ini)} en un ejercicio que no se cerró. "
+                          "Quedan fuera de esta refundición; conviene cerrar primero ese ejercicio.")
+        cta = self.cuenta(cta_resultado_id) if cta_resultado_id else self.cuenta_resultado_ejercicio(emp)
+        if not cta:
+            raise ErrorContable("Indique la cuenta «Resultado del ejercicio» (una cuenta de patrimonio con "
+                                "movimiento) donde se refunden los resultados.")
+        if self.mapa_cuentas(emp)[cta["id"]]["seccion_ef"] != "PAT" or not cta["imputable"]:
+            raise ErrorContable(f"{cta['codigo']} {cta['nombre']} no es una cuenta de patrimonio con movimiento.")
+        # 1. revaluación
+        reval = None
+        if revaluar:
+            _, lineas = self.revaluacion(emp, fin)       # lanza ErrorContable si falta una cotización
+            reval = lineas or None
+        # 2. refundición (con la revaluación ya contada, aunque todavía no esté registrada)
+        grupos = self._saldos_grupo(emp, ini, fin, SECCIONES_ER)
+        if reval:
+            grupos = self._sumar_lineas(emp, grupos, reval, SECCIONES_ER)
+        refund = [self._linea_cancela(g, "Refundición de resultados") for g in grupos if g["saldo"]]
+        # ganancia (> 0): los ingresos tenían saldo acreedor y se cancelan al Debe
+        resultado = sum(l["debe"] for l in refund) - sum(l["haber"] for l in refund)
+        if resultado:
+            refund.append(dict(cuenta_id=cta["id"], concepto="Resultado del ejercicio",
+                               debe=max(-resultado, 0), haber=max(resultado, 0)))
+        # 3. cierre: saldos patrimoniales al cierre, con revaluación y refundición incluidas
+        pat = self._saldos_grupo(emp, None, fin, SECCIONES_PATRIMONIALES)
+        pat = self._sumar_lineas(emp, pat, (reval or []) + refund, SECCIONES_PATRIMONIALES)
+        cierre = [self._linea_cancela(g, "Cierre del ejercicio") for g in pat if g["saldo"] or g["me"]]
+        cierre = [l for l in cierre if l["debe"] or l["haber"]]
+        td, th = sum(l["debe"] for l in cierre), sum(l["haber"] for l in cierre)
+        if td != th:
+            raise ErrorContable(f"El asiento de cierre no balancea (Debe {fmt_importe(td)}, Haber {fmt_importe(th)}). "
+                                "Revise que todas las cuentas tengan su sección (activo, pasivo, patrimonio, "
+                                "ingresos o gastos) y que los asientos del ejercicio balanceen.")
+        sin_saldo_me = [l for l in cierre if l.get("moneda") and not l.get("importe_me")]
+        if sin_saldo_me:
+            avisos.append(f"{len(sin_saldo_me)} cuenta(s) en moneda extranjera tienen saldo en pesos sin saldo en "
+                          "esa moneda (por ejemplo, un ajuste de redondeo); se cierran solo en pesos.")
+        # 4. apertura: el cierre invertido, al día siguiente
+        apertura = [dict(l, debe=l["haber"], haber=l["debe"], concepto="Apertura del ejercicio") for l in cierre]
+        return dict(inicio=ini, fin=fin, apertura=(_d(fin) + _dt.timedelta(days=1)).isoformat(),
+                    revaluacion=reval, refundicion=refund, cierre=cierre, apertura_lineas=apertura,
+                    resultado=resultado, cuenta_resultado=cta, avisos=avisos)
+
+    def _sumar_lineas(self, emp, grupos, lineas, secciones):
+        """Agrega a los saldos por grupo el efecto de líneas todavía no registradas."""
+        mapa = self.mapa_cuentas(emp)
+        por = {(g["cuenta_id"], g["tercero_id"], g["loc"], g["cc_id"]): dict(g) for g in grupos}
+        defecto = self.locales(emp)[0]["id"]
+        for l in lineas:
+            c = mapa[l["cuenta_id"]]
+            if c["seccion_ef"] not in secciones:
+                continue
+            loc = l.get("local_id") or defecto
+            k = (l["cuenta_id"], l.get("tercero_id"), loc, l.get("cc_id"))
+            g = por.setdefault(k, dict(cuenta_id=k[0], tercero_id=k[1], loc=k[2], cc_id=k[3], saldo=0, me=0,
+                                       codigo=c["codigo"], moneda=c["moneda"]))
+            g["saldo"] += int(l.get("debe") or 0) - int(l.get("haber") or 0)
+        return sorted(por.values(), key=lambda x: (x["codigo"], x["loc"] or 0, x["cc_id"] or 0, x["tercero_id"] or 0))
+
+    # ------------------------------------------------------------------ registrar y deshacer
+    def cerrar_ejercicio(self, emp, fin, revaluar=True, cta_resultado_id=None, libro_id=None, local_id=None):
+        """Registra revaluación (si corresponde), refundición, cierre y apertura. Todo o nada."""
+        p = self.preparar_cierre(emp, fin, revaluar, cta_resultado_id)
+        libro_id = libro_id or next((l["id"] for l in self.libros(emp) if l["codigo"] == "DG"),
+                                    next((l["id"] for l in self.libros(emp) if l["tipo"] == "DIARIO"), None))
+        local_id = local_id or self.locales(emp)[0]["id"]
+        if cta_resultado_id:
+            self.fijar_cuenta_resultado_ejercicio(emp, cta_resultado_id)
+        creados = []
+        try:
+            fecha = fmt_fecha(p["fin"])
+            if p["revaluacion"]:
+                creados.append(self.guardar_asiento(emp, p["fin"], libro_id, local_id,
+                                                    f"Diferencia de cambio por revaluación al {fecha}",
+                                                    [dict(l) for l in p["revaluacion"]], tipo="DIF_CAMBIO"))
+            if p["refundicion"]:
+                creados.append(self.guardar_asiento(emp, p["fin"], libro_id, local_id,
+                                                    f"Refundición de resultados del ejercicio al {fecha}",
+                                                    [dict(l) for l in p["refundicion"]], tipo="REFUNDICION"))
+            if not p["cierre"]:
+                raise ErrorContable("No hay saldos patrimoniales para cerrar.")
+            creados.append(self.guardar_asiento(emp, p["fin"], libro_id, local_id, f"Cierre del ejercicio al {fecha}",
+                                                [dict(l) for l in p["cierre"]], tipo="CIERRE"))
+            creados.append(self.guardar_asiento(emp, p["apertura"], libro_id, local_id,
+                                                f"Apertura del ejercicio al {fmt_fecha(p['apertura'])}",
+                                                [dict(l) for l in p["apertura_lineas"]], tipo="APERTURA"))
+        except Exception:
+            with self.con:
+                for aid in creados:
+                    self.con.execute("DELETE FROM asientos WHERE id=?", (aid,))
+            raise
+        p["asientos"] = creados
+        return p
+
+    def deshacer_cierre(self, emp):
+        """Elimina refundición, cierre y apertura del último ejercicio cerrado (la revaluación queda)."""
+        cs = self.cierres(emp)
+        if not cs:
+            raise ErrorContable("No hay ejercicios cerrados.")
+        c = cs[-1]
+        with self.con:
+            for aid in (c["apertura_id"], c["cierre_id"], c["refundicion_id"]):
+                if aid:
+                    self.con.execute("DELETE FROM asientos WHERE id=?", (aid,))
+        return c
+
+    # ------------------------------------------------------------------ vista de informes
+    def para_informes(self, emp, hasta=None, desde=None, incluir_cierre=False, factor=None, factores_mes=None,
+                      cifras=None):
+        """Contabilidad para calcular informes. Sin asientos de cierre, conversión ni reexpresión devuelve la
+        misma; si no, una copia en memoria donde:
+          - se quitan el cierre y la apertura de cada ejercicio cerrado (se anulan entre sí);
+          - la refundición se quita si el informe termina dentro de ese ejercicio o si su período la incluye
+            (desde ≤ fin del ejercicio < hasta); si no, se la ubica «entre días» (fin + espacio), así cuenta en
+            los saldos acumulados posteriores pero no en ningún período que termine el último día del ejercicio
+            ni en ninguno que empiece el primer día del siguiente;
+          - los importes se multiplican por 'factor' (todos) o por factores_mes['AAAA-MM'] (según el mes del
+            asiento o del presupuesto), redondeando por asiento para que siga balanceando."""
+        hasta = parse_fecha(hasta) if hasta else _dt.date.today().isoformat()
+        desde = parse_fecha(desde) if desde else None
+        quitar, mover = set(), []
+        if not incluir_cierre:
+            for c in self.cierres(emp):
+                quitar.update(i for i in (c["cierre_id"], c["apertura_id"]) if i)
+                if c["refundicion_id"]:
+                    if c["fin"] >= hasta or (desde and desde <= c["fin"]):
+                        quitar.add(c["refundicion_id"])
+                    else:
+                        mover.append((c["fin"] + " ", c["refundicion_id"]))
+        if not quitar and not mover and factor is None and not factores_mes:
+            return self
+        mem = sqlite3.connect(":memory:")
+        self.con.backup(mem)
+        mem.row_factory = sqlite3.Row
+        mem.execute("PRAGMA foreign_keys = ON")
+        with mem:
+            mem.executemany("UPDATE asientos SET fecha=? WHERE id=?", mover)
+            if quitar:
+                marcas = ",".join("?" * len(quitar))
+                mem.execute(f"DELETE FROM movimientos WHERE asiento_id IN ({marcas})", tuple(quitar))
+                mem.execute(f"DELETE FROM asientos WHERE id IN ({marcas})", tuple(quitar))
+            if factor is not None or factores_mes:
+                _escalar(mem, emp, factor, factores_mes)
+        copia = type(self)(mem)
+        copia._cifras = cifras
+        return copia
+
+
+def _escalar(con, emp, factor, factores_mes):
+    def f_de(fecha):
+        if factores_mes:
+            return factores_mes.get(fecha[:7], factores_mes.get("ultimo", 1.0)) * (factor or 1.0)
+        return factor
+    nuevos = []
+    for a in con.execute("SELECT id, fecha FROM asientos WHERE empresa_id=?", (emp,)).fetchall():
+        f = f_de(a["fecha"])
+        movs = con.execute("SELECT id, debe, haber FROM movimientos WHERE asiento_id=?", (a["id"],)).fetchall()
+        out = {m["id"]: [int(round(m["debe"] * f)), int(round(m["haber"] * f))] for m in movs}
+        dif = sum(v[0] for v in out.values()) - sum(v[1] for v in out.values())
+        if dif and out:
+            lado = 1 if dif > 0 else 0
+            mayor = max(out, key=lambda k: out[k][lado])
+            out[mayor][lado] += abs(dif)
+        nuevos.extend((d, h, i) for i, (d, h) in out.items())
+    con.executemany("UPDATE movimientos SET debe=?, haber=? WHERE id=?", nuevos)
+    # presupuestos: el mes 1 es el del inicio de cada presupuesto
+    for p in con.execute("SELECT id, inicio FROM presupuestos WHERE empresa_id=?", (emp,)).fetchall():
+        ini = _d(p["inicio"])
+        for it in con.execute("SELECT id, mes, importe FROM presupuesto_items WHERE presupuesto_id=?",
+                              (p["id"],)).fetchall():
+            f = f_de(_mas_meses(ini, it["mes"] - 1).isoformat())
+            con.execute("UPDATE presupuesto_items SET importe=? WHERE id=?", (int(round(it["importe"] * f)), it["id"]))
