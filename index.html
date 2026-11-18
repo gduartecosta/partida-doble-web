@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Partida Doble web · prueba de concepto</title>
+<style>
+  :root {
+    --tinta: #1f2a37; --suave: #5b6675; --linea: #d9dee5; --fondo: #f4f6f8; --papel: #ffffff;
+    --acento: #1d4e89; --acento-claro: #e7eef7; --ok: #2f855a; --mal: #b42318; --alerta: #fdecea;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--tinta);
+         background: var(--fondo); }
+  header { background: var(--acento); color: #fff; padding: 14px 16px 12px; }
+  header h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: .2px; }
+  header p { margin: 2px 0 0; font-size: 13px; opacity: .85; }
+  main { max-width: 980px; margin: 0 auto; padding: 12px; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+    .tarjeta { min-width: 0; background: var(--papel); border: 1px solid var(--linea); border-radius: 10px; padding: 14px; }
+  .tarjeta h2 { margin: 0 0 10px; font-size: 15px; color: var(--acento); text-transform: uppercase; letter-spacing: .6px; }
+  .fila { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, .boton { appearance: none; border: 1px solid var(--acento); background: var(--acento); color: #fff;
+         font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px; cursor: pointer; min-height: 44px; }
+  button.sec, .boton.sec { background: #fff; color: var(--acento); }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=file] { position: absolute; left: -9999px; }
+  label.campo { display: grid; gap: 4px; font-size: 13px; color: var(--suave); flex: 1 1 140px; }
+  select, input[type=date] { font: inherit; color: var(--tinta); padding: 9px 10px; border: 1px solid var(--linea);
+         border-radius: 8px; background: #fff; min-height: 44px; width: 100%; }
+  #estado { font-size: 14px; color: var(--suave); margin-top: 10px; min-height: 1.4em; }
+  #estado.error { color: var(--mal); }
+  .barra { height: 4px; background: var(--acento-claro); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .barra > i { display: block; height: 100%; width: 0; background: var(--acento); transition: width .3s; }
+  #cabecera h3 { margin: 0; font-size: 17px; }
+  #cabecera p { margin: 2px 0 10px; color: var(--suave); font-size: 13px; }
+  .tabla { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--linea); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #eef1f4; white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--acento-claro); text-align: left; font-weight: 650; z-index: 1; }
+  th.num, td.num { text-align: right; }
+  td.texto { white-space: normal; min-width: 150px; }
+  tr.titulo td { font-weight: 700; font-size: 14px; padding-top: 10px; }
+  tr.subtitulo td { font-weight: 650; background: #f7f9fb; }
+  tr.subtotal td { font-weight: 650; border-top: 1px solid #b8c1cc; }
+  tr.total td { font-weight: 750; border-top: 1px solid #444; border-bottom: 3px double #444; }
+  tr.alerta td { background: var(--alerta); color: var(--mal); }
+  .notas { font-size: 12.5px; color: var(--suave); font-style: italic; margin: 8px 2px 0; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
+  dt { color: var(--suave); } dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .pista { font-size: 13px; color: var(--suave); margin: 8px 0 0; }
+  footer { max-width: 980px; margin: 0 auto; padding: 4px 16px 24px; font-size: 12px; color: var(--suave); }
+  @media (min-width: 720px) { main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } #t-informe-res { grid-column: 1 / -1; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Partida Doble · versión web</h1>
+  <p>Prueba de concepto: el mismo núcleo contable del programa de escritorio, funcionando en el navegador</p>
+</header>
+<main>
+  <section class="tarjeta">
+    <h2>1 · Empresa</h2>
+    <div class="fila">
+      <label class="boton" for="archivo" id="b-abrir" aria-disabled="true">Abrir archivo .db…</label>
+      <input type="file" id="archivo">
+      <button class="sec" id="b-ejemplo" disabled>Usar la empresa de ejemplo</button>
+    </div>
+    <p class="pista">En un celular Android, «Abrir archivo» permite elegir el archivo desde Google Drive.</p>
+    <div class="barra"><i id="progreso"></i></div>
+    <div id="estado">Preparando Python en el navegador…</div>
+  </section>
+
+  <section class="tarjeta" id="t-informe">
+    <h2>2 · Informe</h2>
+    <div class="fila">
+      <label class="campo">Empresa<select id="s-empresa" disabled></select></label>
+      <label class="campo">Informe<select id="s-informe" disabled>
+        <option value="balance">Balance de comprobación</option>
+        <option value="situacion">Estado de situación financiera</option>
+        <option value="resultados">Estado de resultados</option>
+        <option value="diario">Libro diario</option>
+      </select></label>
+    </div>
+    <div class="fila" style="margin-top:8px">
+      <label class="campo">Desde<input type="date" id="f-desde" disabled></label>
+      <label class="campo">Hasta<input type="date" id="f-hasta" disabled></label>
+      <label class="campo">Nivel<select id="s-nivel" disabled>
+        <option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option>
+      </select></label>
+    </div>
+    <div class="fila" style="margin-top:10px"><button id="b-ver" disabled>Ver informe</button></div>
+  </section>
+
+  <section class="tarjeta" id="t-informe-res" hidden>
+    <div id="cabecera"></div>
+    <div class="tabla"><table id="tabla"></table></div>
+    <div class="notas" id="notas"></div>
+  </section>
+
+  <section class="tarjeta" id="t-medicion">
+    <h2>3 · Medición en este equipo</h2>
+    <dl id="medicion"></dl>
+    <div class="fila" style="margin-top:10px"><button class="sec" id="b-copiar">Copiar la medición</button></div>
+    <p class="pista" id="copiado"></p>
+  </section>
+</main>
+<footer>
+  Dirección pedagógica: Gustavo Duarte. Programación asistida por inteligencia artificial (Claude, Anthropic).
+  Software libre bajo licencia GNU GPL versión 3 o posterior. Usa Pyodide (Mozilla Public License 2.0) para ejecutar Python en el navegador.
+  Esta prueba no guarda nada: la base se abre en la memoria del navegador.
+</footer>
+
+<script type="module">
+const VERSIONES = ["0.27.8", "0.27.7", "0.27.5", "0.27.0"];
+const $ = (id) => document.getElementById(id);
+const med = { "Navegador": navigator.userAgent.replace(/^Mozilla\/5\.0 /, "").slice(0, 120),
+  "Pantalla": `${screen.width} × ${screen.height} (ventana ${innerWidth} × ${innerHeight})`,
+  "Núcleos del procesador": navigator.hardwareConcurrency || "sin dato",
+  "Memoria del equipo": navigator.deviceMemory ? `${navigator.deviceMemory} GB (aprox.)` : "el navegador no la informa" };
+let py = null, t0 = performance.now();
+
+function mostrarMedicion() {
+  if (performance.memory) med["Memoria usada por la página"] = `${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB`;
+  $("medicion").innerHTML = Object.entries(med).map(([k, v]) => `<dt>${k}</dt><dd>${esc(String(v))}</dd>`).join("");
+}
+function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function estado(texto, avance, error) {
+  $("estado").textContent = texto; $("estado").className = error ? "error" : "";
+  if (avance != null) $("progreso").style.width = `${avance}%`;
+}
+const seg = (ms) => `${(ms / 1000).toFixed(1).replace(".", ",")} s`;
+
+function conLimite(promesa, segundos, que) {
+  return Promise.race([promesa, new Promise((_, no) => setTimeout(() => no(new Error(`${que}: sin respuesta en ${segundos} s`)), segundos * 1000))]);
+}
+async function cargarPyodide() {
+  if (window.PD_PYODIDE) return [await import(window.PD_PYODIDE + "pyodide.mjs"), window.PD_PYODIDE, "local"];
+  let ultimo;
+  try {   // primero, los archivos de Python que viajan con esta misma página
+    const propio = new URL("py/", location.href).href;
+    return [await conLimite(import(propio + "pyodide.mjs"), 30, "py/pyodide.mjs"), propio, "propio"];
+  } catch (e) { ultimo = e; med["Intento con archivos propios"] = String(e.message || e); }
+  for (const v of VERSIONES) {
+    const url = `https://cdn.jsdelivr.net/pyodide/v${v}/full/`;
+    try { return [await conLimite(import(url + "pyodide.mjs"), 30, "pyodide " + v), url, v]; } catch (e) { ultimo = e; }
+  }
+  throw ultimo;
+}
+
+async function iniciar() {
+  try {
+    estado("Descargando Python (unos 12 MB la primera vez)…", 10);
+    med["Etapa"] = "1 · descargar el cargador de Python"; mostrarMedicion();
+    const [mod, url, version] = await cargarPyodide();
+    med["Origen de Python"] = url;
+    med["Etapa"] = "2 · iniciar Python (WebAssembly)"; mostrarMedicion();
+    const propio = version === "propio";
+    py = await conLimite(mod.loadPyodide(propio ? { indexURL: url, stdLibURL: url + "python_stdlib.zip.wasm" } : { indexURL: url }),
+                         120, "iniciar Python");
+    estado("Cargando la base de datos SQLite…", 55);
+    med["Etapa"] = "3 · cargar SQLite"; mostrarMedicion();
+    if (propio) {
+      const whl = new Uint8Array(await (await fetch(url + "sqlite3.whl.wasm")).arrayBuffer());
+      py.unpackArchive(whl, "zip", { extractDir: "/lib/python3.12/site-packages" });
+      await conLimite(py.runPythonAsync("import sqlite3"), 60, "cargar SQLite");
+    } else {
+      await conLimite(py.loadPackage("sqlite3"), 60, "cargar SQLite");
+    }
+    med["Etapa"] = "4 · cargar el núcleo contable"; mostrarMedicion();
+    const t1 = performance.now();
+    med["Pyodide"] = version;
+    med["Carga de Python"] = seg(t1 - t0);
+    estado("Cargando el núcleo contable…", 75);
+    const lista = (await (await fetch("archivos.txt")).text()).trim().split("\n");
+    await Promise.all(lista.map(async (f) => {
+      const texto = await (await fetch(`nucleo/${f.replace("__init__.py", "init__.py")}.txt`)).text();
+      const ruta = `/home/pyodide/pd/${f}`;
+      py.FS.mkdirTree(ruta.slice(0, ruta.lastIndexOf("/")));
+      py.FS.writeFile(ruta, texto);
+    }));
+    py.runPython(`import sys; sys.path.insert(0, "/home/pyodide/pd")\nimport web_pd`);
+    med["Carga del núcleo contable"] = seg(performance.now() - t1);
+    med["Total hasta estar listo"] = seg(performance.now() - t0);
+    med["Etapa"] = "lista";
+    $("b-ejemplo").disabled = false; $("b-abrir").removeAttribute("aria-disabled");
+    estado("Listo. Abra un archivo .db o use la empresa de ejemplo.", 100);
+  } catch (e) {
+    estado("No se pudo cargar Python en este navegador: " + (e.message || e) + ". Toque «Copiar la medición» y péguela en la conversación.", 100, true);
+    med["Error"] = String(e.message || e);
+  }
+  mostrarMedicion();
+}
+
+async function abrirBytes(bytes, nombre) {
+  if (!py) return;
+  estado(`Abriendo ${nombre}…`, null);
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const t = performance.now();
+    py.FS.writeFile("/tmp/empresa.db", bytes);
+    const r = JSON.parse(py.globals.get("web_pd").abrir("/tmp/empresa.db"));
+    med["Archivo"] = `${nombre} (${Math.round(bytes.length / 1024)} KB, ${r.asientos} asientos)`;
+    med["Apertura de la base"] = seg(performance.now() - t);
+    const s = $("s-empresa");
+    s.innerHTML = r.empresas.map((e) => `<option value="${e.id}" data-i="${e.inicio}" data-c="${e.cierre}">${esc(e.codigo + " · " + e.nombre)}</option>`).join("");
+    for (const id of ["s-empresa", "s-informe", "f-desde", "f-hasta", "s-nivel", "b-ver"]) $(id).disabled = false;
+    fechasEmpresa();
+    estado(`Abierta: ${r.empresas.length} empresa(s), ${r.asientos} asientos.`, null);
+  } catch (e) {
+    estado("No se pudo abrir el archivo: " + String(e.message || e).split("\n").filter(Boolean).pop(), null, true);
+  }
+  mostrarMedicion();
+}
+function fechasEmpresa() {
+  const o = $("s-empresa").selectedOptions[0];
+  if (!o) return;
+  $("f-desde").value = o.dataset.i || ""; $("f-hasta").value = o.dataset.c || "";
+}
+
+async function verInforme() {
+  estado("Calculando…", null);
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const t = performance.now();
+    const r = JSON.parse(py.globals.get("web_pd").informe($("s-informe").value, Number($("s-empresa").value),
+      $("f-desde").value || null, $("f-hasta").value || null, $("s-nivel").value));
+    const tCalc = performance.now() - t;
+    pintar(r);
+    const tTotal = performance.now() - t;
+    med["Último informe"] = `${$("s-informe").selectedOptions[0].text}: ${r.filas.length} filas, cálculo ${seg(tCalc)}, en pantalla ${seg(tTotal)}`;
+    estado("Listo.", null);
+  } catch (e) {
+    estado("Error en el informe: " + String(e.message || e).split("\n").filter(Boolean).pop(), null, true);
+  }
+  mostrarMedicion();
+}
+function pintar(r) {
+  $("t-informe-res").hidden = false;
+  $("cabecera").innerHTML = `<h3>${esc(r.titulo)}</h3><p>${esc(r.subtitulo || "")}</p>`;
+  const tipos = r.columnas.map((c) => c[1]);
+  const primeraTexto = tipos.findIndex((t) => t === "texto");
+  let h = "<thead><tr>" + r.columnas.map(([n, t]) => `<th class="${t === "importe" ? "num" : ""}">${esc(n)}</th>`).join("") + "</tr></thead><tbody>";
+  for (const [estilo, nivel, valores] of r.filas) {
+    h += `<tr class="${estilo}">` + valores.map((v, j) => {
+      const cls = tipos[j] === "importe" ? "num" : (j === primeraTexto ? "texto" : "");
+      const sangria = j === primeraTexto && nivel ? ` style="padding-left:${8 + nivel * 12}px"` : "";
+      return `<td class="${cls}"${sangria}>${esc(v)}</td>`;
+    }).join("") + "</tr>";
+  }
+  $("tabla").innerHTML = h + "</tbody>";
+  $("notas").innerHTML = r.notas.map((n) => `<div>${esc(n)}</div>`).join("");
+  $("t-informe-res").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+$("archivo").addEventListener("change", async (ev) => {
+  const f = ev.target.files[0];
+  if (f) await abrirBytes(new Uint8Array(await f.arrayBuffer()), f.name);
+  ev.target.value = "";
+});
+$("b-abrir").addEventListener("click", (ev) => { if (!py) ev.preventDefault(); });
+$("b-ejemplo").addEventListener("click", async () => {
+  const partes = await (await fetch("ejemplo.json")).json();
+  const bin = atob(partes.join(""));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  await abrirBytes(bytes, "ejemplo_comercial_2026.db");
+});
+$("s-empresa").addEventListener("change", fechasEmpresa);
+$("b-ver").addEventListener("click", verInforme);
+$("b-copiar").addEventListener("click", async () => {
+  const texto = Object.entries(med).map(([k, v]) => `${k}: ${v}`).join("\n");
+  try { await navigator.clipboard.writeText(texto); $("copiado").textContent = "Copiado. Péguelo en la conversación."; }
+  catch { $("copiado").textContent = "El navegador no dejó copiar; puede seleccionar el texto de arriba."; }
+});
+addEventListener("error", (e) => { med["Error de la página"] = String(e.message || e); mostrarMedicion(); });
+addEventListener("unhandledrejection", (e) => { med["Error de la página"] = String(e.reason && e.reason.message || e.reason); mostrarMedicion(); });
+mostrarMedicion();
+iniciar();
+</script>
+</body>
+</html>
