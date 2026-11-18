@@ -1,0 +1,10 @@
+Archivos de esta carpeta (py/)
+
+Son la distribución de Pyodide 0.27.8 (https://pyodide.org), que permite ejecutar Python en el navegador.
+- Pyodide: Mozilla Public License 2.0 (https://github.com/pyodide/pyodide/blob/main/LICENSE).
+- python_stdlib.zip.wasm: biblioteca estándar de CPython 3.12, Python Software Foundation License
+  (https://docs.python.org/3/license.html). Es el archivo python_stdlib.zip de Pyodide con otro nombre.
+- sqlite3.whl.wasm: módulo sqlite3 de Pyodide (sqlite3-1.0.0-cp312-cp312-pyodide_2024_0_wasm32.whl con otro nombre).
+  SQLite es de dominio público (https://sqlite.org/copyright.html).
+
+Los archivos no se modificaron; solo se les cambió el nombre para que los sirva cualquier alojamiento de páginas.
