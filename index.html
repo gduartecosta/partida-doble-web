@@ -136,10 +136,13 @@ function conLimite(promesa, segundos, que) {
 async function cargarPyodide() {
   if (window.PD_PYODIDE) return [await import(window.PD_PYODIDE + "pyodide.mjs"), window.PD_PYODIDE, "local"];
   let ultimo;
-  try {   // primero, los archivos de Python que viajan con esta misma página
-    const propio = new URL("py/", location.href).href;
-    return [await conLimite(import(propio + "pyodide.mjs"), 30, "py/pyodide.mjs"), propio, "propio"];
-  } catch (e) { ultimo = e; med["Intento con archivos propios"] = String(e.message || e); }
+  // primero, los archivos de Python que viajan con esta misma página: en la carpeta py/ o sueltos junto a index.html
+  for (const carpeta of ["py/", "./"]) {
+    const propio = new URL(carpeta, location.href).href;
+    try {
+      return [await conLimite(import(propio + "pyodide.mjs"), 30, carpeta + "pyodide.mjs"), propio, "propio"];
+    } catch (e) { ultimo = e; med["Intento con archivos propios (" + (carpeta === "./" ? "raíz" : carpeta) + ")"] = String(e.message || e); }
+  }
   for (const v of VERSIONES) {
     const url = `https://cdn.jsdelivr.net/pyodide/v${v}/full/`;
     try { return [await conLimite(import(url + "pyodide.mjs"), 30, "pyodide " + v), url, v]; } catch (e) { ultimo = e; }
@@ -176,8 +179,10 @@ async function iniciar() {
     const lista = (await rl.text()).trim().split(/\r?\n/);
     const faltan = [];
     await Promise.all(lista.map(async (f) => {
-      const resp = await fetch(`nucleo/${f.replace("__init__.py", "init__.py")}.txt`);
-      if (!resp.ok) { faltan.push(`nucleo/${f.replace("__init__.py", "init__.py")}.txt`); return; }
+      const nombre = `${f.replace("__init__.py", "init__.py")}.txt`;
+      let resp = await fetch(`nucleo/${nombre}`);   // en la carpeta nucleo/ o, si se subió suelto, junto a index.html
+      if (!resp.ok) resp = await fetch(nombre.split("/").pop());
+      if (!resp.ok) { faltan.push(`nucleo/${nombre}`); return; }
       const texto = await resp.text();
       const ruta = `/home/pyodide/pd/${f}`;
       py.FS.mkdirTree(ruta.slice(0, ruta.lastIndexOf("/")));
